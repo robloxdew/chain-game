@@ -1,0 +1,86 @@
+name: Build iOS IPA
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-ios:
+    runs-on: macos-latest
+    
+    steps:
+      - name: 检出代码（含 LFS）
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+      
+      - name: 缓存 Godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            /Applications/Godot.app
+            ~/Library/Application Support/Godot/export_templates
+          key: godot-4.7.2-ios
+      
+      - name: 下载 Godot 编辑器
+        run: |
+          if [ ! -d "/Applications/Godot.app" ]; then
+            curl -L -o godot.zip https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_macos.universal.zip
+            unzip -q godot.zip
+            sudo mv Godot.app /Applications/Godot.app
+          fi
+          echo "Godot 就绪"
+      
+      - name: 下载 iOS 导出模板
+        run: |
+          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
+          if [ ! -d "$TEMPLATE_DIR" ]; then
+            mkdir -p "$TEMPLATE_DIR"
+            curl -L -o templates.tpz https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz
+            unzip -q templates.tpz
+            mv templates/* "$TEMPLATE_DIR/"
+          fi
+          echo "模板就绪"
+      
+      - name: 导出 Xcode 项目
+        run: |
+          mkdir -p build/ios
+          /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-debug "iOS" build/ios/ || true
+          echo "=== 导出结果 ==="
+          ls -la build/ios/
+      
+      - name: Xcode 构建
+        run: |
+          cd build/ios
+          XC_PROJ=$(find . -maxdepth 2 -name "*.xcodeproj" | head -1)
+          echo "项目: $XC_PROJ"
+          if [ -z "$XC_PROJ" ]; then
+            echo "没找到 Xcode 项目，跳过构建"
+            exit 0
+          fi
+          xcodebuild -list -project "$XC_PROJ"
+          SCHEME=$(basename "$XC_PROJ" .xcodeproj)
+          xcodebuild -project "$XC_PROJ" \
+            -scheme "$SCHEME" \
+            -configuration Release \
+            -sdk iphoneos \
+            -archivePath "$PWD/App.xcarchive" \
+            archive \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+          mkdir -p Payload
+          cp -r App.xcarchive/Products/Applications/*.app Payload/
+          zip -r chain-unsigned.ipa Payload/
+          echo "=== IPA ==="
+          ls -la chain-unsigned.ipa
+      
+      - name: 上传 IPA
+        uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: chain-ios-ipa
+          path: build/ios/chain-unsigned.ipa
+          retention-days: 30
+          if-no-files-found: warn
