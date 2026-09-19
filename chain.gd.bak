@@ -1,0 +1,640 @@
+extends CharacterBody3D
+
+@export var patrol_speed = 1.8
+@export var chase_speed = 3.5
+var gravity = ProjectSettings.get_setting("physics/3d/default_gravity")
+var U = 0.25
+
+enum State { PATROL, CHASE }
+var state = State.PATROL
+var target: Node3D = null
+var patrol_target = Vector3.ZERO
+var patrol_wait = 0.0
+
+const VISION_RANGE = 18.0
+const ATTACK_RANGE = 2.0
+const CHASE_RANGE = 26.0
+const ATTACK_DAMAGE = 33.0
+const ATTACK_COOLDOWN = 1.5
+const ATTACK_ANIM_DUR = 0.4
+const ATTACK_HIT_START = 0.2
+const ATTACK_HIT_END = 0.4
+const STUN_DURATION = 0.6
+
+var attack_cooldown = 0.0
+var attack_anim_time = 0.0
+var attack_hit_done = false
+var stun_time = 0.0
+
+var hp = 200.0
+var max_hp = 200.0
+
+const SELF_DESTRUCT_THRESHOLD = 0.5
+const EXPLOSION_RADIUS = 25.0
+const EXPLOSION_MAX_DAMAGE = 200.0
+const EXPLOSION_MIN_DAMAGE = 10.0
+const SELF_DESTRUCT_WARN_TIME = 1.5
+const DESTROY_DELAY_AFTER_EXPLOSION = 0.5
+
+var is_self_destructing = false
+var self_destruct_timer = 0.0
+var has_exploded = false
+
+var model_instance: Node3D = null
+var anim_player: AnimationPlayer = null
+var current_anim = ""
+
+var arm_l_pivot: Node3D = null
+var arm_r_pivot: Node3D = null
+var leg_l_pivot: Node3D = null
+var leg_r_pivot: Node3D = null
+
+var walk_phase = 0.0
+var is_moving = false
+
+var hp_bar_root: Control
+var hp_fill: ColorRect
+const HP_BAR_WIDTH = 80.0
+const HP_BAR_HEIGHT = 8.0
+
+const GRID_CELL = 1.5
+const GRID_SIZE = 60
+const GRID_OFFSET = 45.0
+const REPATH_INTERVAL = 0.5
+const MAX_PATH_ITER = 1500
+
+var current_path: Array = []
+var path_index = 0
+var repath_timer = 0.0
+var _walk_cache: Dictionary = {}
+
+func _ready():
+	load_model()
+	setup_collision()
+	create_hp_bar_ui()
+	
+	await get_tree().process_frame
+	target = get_parent().get_node_or_null("CharacterBody3D")
+	spawn_far_from_player()
+	pick_patrol_target()
+
+# ⭐ 用 run.gltf 作为主模型
+func load_model():
+	var scene = load("res://models/run.gltf")
+	if not scene:
+		print("⚠ 无法加载 run.gltf")
+		return
+	model_instance = scene.instantiate()
+	add_child(model_instance)
+	model_instance.scale = Vector3(0.05, 0.05, 0.05)
+	model_instance.position = Vector3(0, 0, 0)
+	# model_instance.rotation.y = PI
+	
+	anim_player = model_instance.find_child("AnimationPlayer", true, false)
+	if not anim_player:
+		print("⚠ run.gltf 里没有 AnimationPlayer")
+		return
+	print("主模型自带动画：", anim_player.get_animation_list())
+	
+	var node_map = {}
+	_build_node_map(model_instance, model_instance, node_map)
+	print("模型节点数：", node_map.size())
+	
+	_register_first_anim_as("Walk")
+	merge_animations_from("res://models/ldle.gltf", "Idle", node_map)
+	
+	print("最终可用动画：", anim_player.get_animation_list())
+	
+	if anim_player.has_animation("Walk"):
+		anim_player.play("Walk")
+		current_anim = "Walk"
+
+# ⭐ Godot 4 添加动画：必须通过 AnimationLibrary + 设置循环
+func _add_animation(register_name: String, anim: Animation):
+	if not anim_player:
+		return
+	
+	# ⭐ 设置循环模式
+	if register_name == "Idle" or register_name == "Walk":
+		anim.loop_mode = Animation.LOOP_LINEAR
+	else:
+		anim.loop_mode = Animation.LOOP_NONE
+	
+	print("  [loop] ", register_name, " 时长: ", anim.length, "s  循环: ", anim.loop_mode == Animation.LOOP_LINEAR)
+	
+	var lib_name = ""
+	if not anim_player.has_animation_library(lib_name):
+		anim_player.add_animation_library(lib_name, AnimationLibrary.new())
+	var lib = anim_player.get_animation_library(lib_name)
+	if lib.has_animation(register_name):
+		lib.remove_animation(register_name)
+	lib.add_animation(register_name, anim)
+
+func _register_first_anim_as(register_name: String):
+	if not anim_player:
+		return
+	var list = anim_player.get_animation_list()
+	if list.size() == 0:
+		return
+	if anim_player.has_animation(register_name):
+		return
+	var src_name = list[0]
+	var anim = anim_player.get_animation(src_name)
+	_add_animation(register_name, anim.duplicate())
+	print("  ✓ 主模型动画：", src_name, " → ", register_name)
+
+func _build_node_map(node: Node, root: Node, map: Dictionary):
+	if node != root:
+		map[node.name] = root.get_path_to(node)
+	for child in node.get_children():
+		_build_node_map(child, root, map)
+
+func _remap_track_path(old_path: NodePath, node_map: Dictionary) -> NodePath:
+	if old_path.get_name_count() == 0:
+		return old_path
+	var last_name = old_path.get_name(old_path.get_name_count() - 1)
+	if not node_map.has(last_name):
+		return old_path
+	var new_base = str(node_map[last_name])
+	if old_path.get_subname_count() > 0:
+		new_base += ":" + String(old_path.get_subname(0))
+	return NodePath(new_base)
+
+func merge_animations_from(path: String, register_name: String, node_map: Dictionary):
+	if not anim_player:
+		return
+	var anim_scene = load(path)
+	if not anim_scene:
+		print("⚠ 无法加载：", path)
+		return
+	var anim_instance = anim_scene.instantiate()
+	var src_player = anim_instance.find_child("AnimationPlayer", true, false)
+	if not src_player:
+		print("⚠ ", path, " 里没有 AnimationPlayer")
+		anim_instance.queue_free()
+		return
+	var anim_list = src_player.get_animation_list()
+	print(path, " 里的动画：", anim_list)
+	if anim_list.size() == 0:
+		anim_instance.queue_free()
+		return
+	var src_name = anim_list[0]
+	var anim = src_player.get_animation(src_name)
+	var anim_copy = anim.duplicate()
+	var track_count = anim_copy.get_track_count()
+	var fixed = 0
+	for i in range(track_count):
+		var old_path = anim_copy.track_get_path(i)
+		var new_path = _remap_track_path(old_path, node_map)
+		if new_path != old_path:
+			fixed += 1
+		anim_copy.track_set_path(i, new_path)
+	print("  轨道总数：", track_count, " 重写路径：", fixed)
+	_add_animation(register_name, anim_copy)
+	print("  ✓ 已注册：", src_name, " → ", register_name)
+	anim_instance.queue_free()
+
+func play_anim(anim_name: String):
+	if not anim_player:
+		return
+	if current_anim == anim_name:
+		return
+	if not anim_player.has_animation(anim_name):
+		return
+	anim_player.play(anim_name)
+	current_anim = anim_name
+
+func spawn_far_from_player():
+	if not target:
+		return
+	var angle = randf() * PI * 2
+	var dist = randf_range(30.0, 40.0)
+	var offset = Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+	global_position = target.global_position + offset
+	global_position.y = 0
+
+func setup_collision():
+	if not has_node("CollisionShape3D"):
+		var col = CollisionShape3D.new()
+		var shape = CapsuleShape3D.new()
+		shape.radius = 0.45
+		shape.height = 1.5
+		col.shape = shape
+		col.position.y = 0.75
+		add_child(col)
+
+func create_hp_bar_ui():
+	var canvas = CanvasLayer.new()
+	canvas.layer = 5
+	add_child(canvas)
+	hp_bar_root = Control.new()
+	hp_bar_root.size = Vector2(HP_BAR_WIDTH, HP_BAR_HEIGHT)
+	canvas.add_child(hp_bar_root)
+	var bg = ColorRect.new()
+	bg.color = Color(0, 0, 0, 0.75)
+	bg.size = Vector2(HP_BAR_WIDTH, HP_BAR_HEIGHT)
+	hp_bar_root.add_child(bg)
+	hp_fill = ColorRect.new()
+	hp_fill.color = Color(0.9, 0.12, 0.12)
+	hp_fill.size = Vector2(HP_BAR_WIDTH, HP_BAR_HEIGHT)
+	hp_bar_root.add_child(hp_fill)
+
+func update_hp_bar_visual():
+	if not hp_fill:
+		return
+	var ratio = clamp(hp / max_hp, 0.0, 1.0)
+	hp_fill.size.x = HP_BAR_WIDTH * ratio
+
+func update_hp_bar_position():
+	if not hp_bar_root:
+		return
+	var cam = get_viewport().get_camera_3d()
+	if not cam:
+		hp_bar_root.visible = false
+		return
+	var world_pos = global_position + Vector3(0, 2.1, 0)
+	if cam.is_position_behind(world_pos):
+		hp_bar_root.visible = false
+		return
+	var screen_pos = cam.unproject_position(world_pos)
+	hp_bar_root.visible = true
+	hp_bar_root.position = screen_pos - Vector2(HP_BAR_WIDTH / 2.0, HP_BAR_HEIGHT / 2.0)
+
+func _process(delta):
+	update_hp_bar_position()
+
+func _physics_process(delta):
+	if not is_on_floor():
+		velocity.y -= gravity * delta
+	else:
+		velocity.y = 0
+	
+	if attack_cooldown > 0:
+		attack_cooldown -= delta
+	
+	if is_self_destructing:
+		self_destruct_timer -= delta
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		if target:
+			face_direction((target.global_position - global_position).normalized())
+		var shake = (1.0 - self_destruct_timer / SELF_DESTRUCT_WARN_TIME) * 0.08
+		position.x += randf_range(-shake, shake)
+		position.z += randf_range(-shake, shake)
+		if self_destruct_timer <= 0:
+			explode()
+			return
+		move_and_slide()
+		return
+	
+	if stun_time > 0:
+		stun_time -= delta
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		if attack_anim_time > 0:
+			attack_anim_time = 0.0
+			attack_hit_done = true
+		play_anim("Idle")
+		move_and_slide()
+		return
+	
+	if attack_anim_time > 0:
+		attack_anim_time -= delta
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		if target:
+			face_direction((target.global_position - global_position).normalized())
+		var elapsed = ATTACK_ANIM_DUR - attack_anim_time
+		if not attack_hit_done and elapsed >= ATTACK_HIT_START:
+			attack_hit_done = true
+			attack_player()
+		if attack_anim_time < 0:
+			attack_anim_time = 0.0
+		move_and_slide()
+		return
+	
+	update_state()
+	match state:
+		State.PATROL:
+			do_patrol(delta)
+		State.CHASE:
+			do_chase(delta)
+	
+	if is_moving:
+		play_anim("Walk")
+	else:
+		play_anim("Idle")
+	
+	move_and_slide()
+
+func update_state():
+	if not target:
+		state = State.PATROL
+		return
+	var dist = global_position.distance_to(target.global_position)
+	match state:
+		State.PATROL:
+			if dist < VISION_RANGE:
+				state = State.CHASE
+		State.CHASE:
+			if dist > CHASE_RANGE:
+				state = State.PATROL
+				current_path.clear()
+				pick_patrol_target()
+
+func do_patrol(delta):
+	if patrol_wait > 0:
+		patrol_wait -= delta
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		return
+	var dir = patrol_target - global_position
+	dir.y = 0
+	var dist = dir.length()
+	if dist < 1.0:
+		patrol_wait = randf_range(1.5, 3.0)
+		pick_patrol_target()
+		return
+	dir = dir.normalized()
+	velocity.x = dir.x * patrol_speed
+	velocity.z = dir.z * patrol_speed
+	is_moving = true
+	face_direction(dir)
+
+func pick_patrol_target():
+	for i in range(10):
+		var angle = randf() * PI * 2
+		var dist = randf_range(8.0, 20.0)
+		var pos = global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+		if pos.length() < 45.0:
+			patrol_target = pos
+			return
+
+func do_chase(delta):
+	if not target:
+		return
+	var dist = global_position.distance_to(target.global_position)
+	if dist < ATTACK_RANGE:
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		current_path.clear()
+		face_direction((target.global_position - global_position).normalized())
+		if attack_cooldown <= 0:
+			start_attack()
+		return
+	if has_line_of_sight():
+		current_path.clear()
+		var dir = target.global_position - global_position
+		dir.y = 0
+		dir = dir.normalized()
+		velocity.x = dir.x * chase_speed
+		velocity.z = dir.z * chase_speed
+		is_moving = true
+		face_direction(dir)
+	else:
+		repath_timer -= delta
+		if repath_timer <= 0 or current_path.size() == 0:
+			repath_timer = REPATH_INTERVAL
+			current_path = find_path(global_position, target.global_position)
+			path_index = 0
+		if current_path.size() > 0:
+			follow_path()
+		else:
+			var dir = target.global_position - global_position
+			dir.y = 0
+			dir = dir.normalized()
+			velocity.x = dir.x * chase_speed
+			velocity.z = dir.z * chase_speed
+			is_moving = true
+			face_direction(dir)
+
+func start_attack():
+	attack_anim_time = ATTACK_ANIM_DUR
+	attack_hit_done = false
+	attack_cooldown = ATTACK_COOLDOWN
+	play_anim("Attack")
+	print("CHAIN 挥动电锯！")
+
+func face_direction(dir: Vector3):
+	if dir.length() > 0.01:
+		look_at(Vector3(global_position.x + dir.x, global_position.y, global_position.z + dir.z))
+
+func attack_player():
+	if not target:
+		return
+	if target.has_method("is_in_parry_window") and target.is_in_parry_window():
+		stun_time = STUN_DURATION
+		attack_anim_time = 0.0
+		attack_hit_done = true
+		print("⚡ 擦刀成功！CHAIN 眩晕")
+		if target.has_method("on_parry_success"):
+			target.on_parry_success()
+	else:
+		if target.has_method("take_damage"):
+			target.take_damage(ATTACK_DAMAGE)
+			print("CHAIN 电锯命中！")
+
+func take_damage(amount: float):
+	if is_self_destructing or has_exploded:
+		return
+	hp -= amount
+	update_hp_bar_visual()
+	print("CHAIN 受到伤害！剩余血量：", hp)
+	if hp <= max_hp * SELF_DESTRUCT_THRESHOLD and not is_self_destructing:
+		start_self_destruct()
+
+func start_self_destruct():
+	is_self_destructing = true
+	self_destruct_timer = SELF_DESTRUCT_WARN_TIME
+	attack_anim_time = 0.0
+	attack_hit_done = true
+	stun_time = 0.0
+	current_path.clear()
+	print("⚠⚠⚠ CHAIN 开始自爆！")
+	if hp_fill:
+		hp_fill.color = Color(1.0, 0.6, 0.0)
+	play_anim("SelfDestruct")
+	on_self_destruct_start()
+
+func on_self_destruct_start():
+	pass
+
+func explode():
+	has_exploded = true
+	print("💥💥💥 CHAIN 自爆！")
+	play_explosion_anim()
+	if target and target.has_method("take_damage"):
+		var dist = global_position.distance_to(target.global_position)
+		if dist <= EXPLOSION_RADIUS:
+			var dr = 1.0 - (dist / EXPLOSION_RADIUS)
+			var damage = EXPLOSION_MIN_DAMAGE + (EXPLOSION_MAX_DAMAGE - EXPLOSION_MIN_DAMAGE) * dr
+			target.take_damage(damage)
+			print("💥 爆炸命中！距离: %.1fm，伤害: %.1f" % [dist, damage])
+		else:
+			print("💥 玩家躲过了爆炸")
+	if hp_bar_root:
+		hp_bar_root.visible = false
+	if model_instance:
+		model_instance.visible = false
+	await get_tree().create_timer(DESTROY_DELAY_AFTER_EXPLOSION).timeout
+	queue_free()
+
+func play_explosion_anim():
+	pass
+
+func has_line_of_sight() -> bool:
+	if not target:
+		return false
+	var from = global_position + Vector3(0, 1.0, 0)
+	var to = target.global_position + Vector3(0, 1.0, 0)
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(from, to)
+	query.exclude = [self.get_rid(), target.get_rid()]
+	var result = space_state.intersect_ray(query)
+	return result.is_empty()
+
+func follow_path():
+	while path_index < current_path.size():
+		var wp = current_path[path_index]
+		var to_wp = wp - global_position
+		to_wp.y = 0
+		if to_wp.length() < 0.9:
+			path_index += 1
+		else:
+			break
+	if path_index >= current_path.size():
+		velocity.x = 0
+		velocity.z = 0
+		is_moving = false
+		return
+	var wp = current_path[path_index]
+	var dir = wp - global_position
+	dir.y = 0
+	dir = dir.normalized()
+	velocity.x = dir.x * chase_speed
+	velocity.z = dir.z * chase_speed
+	is_moving = true
+	face_direction(dir)
+
+func find_path(start_world: Vector3, end_world: Vector3) -> Array:
+	_walk_cache.clear()
+	var start_grid = world_to_grid(start_world)
+	var end_grid = world_to_grid(end_world)
+	if not is_walkable(end_grid):
+		end_grid = find_nearest_walkable(end_grid)
+		if end_grid.x < 0:
+			return []
+	var open = {}
+	var closed = {}
+	var sk = _gkey(start_grid)
+	open[sk] = {"pos": start_grid, "g": 0.0, "h": _heur(start_grid, end_grid), "parent": null}
+	var iter = 0
+	while open.size() > 0 and iter < MAX_PATH_ITER:
+		iter += 1
+		var best_key = ""
+		var best_f = INF
+		for k in open.keys():
+			var n = open[k]
+			var f = n.g + n.h
+			if f < best_f:
+				best_f = f
+				best_key = k
+		var cur = open[best_key]
+		open.erase(best_key)
+		closed[best_key] = true
+		if cur.pos == end_grid:
+			return _build_path(cur)
+		for dx in range(-1, 2):
+			for dz in range(-1, 2):
+				if dx == 0 and dz == 0:
+					continue
+				var nb = cur.pos + Vector2i(dx, dz)
+				var nk = _gkey(nb)
+				if closed.has(nk):
+					continue
+				if not is_walkable(nb):
+					continue
+				if dx != 0 and dz != 0:
+					if not is_walkable(cur.pos + Vector2i(dx, 0)):
+						continue
+					if not is_walkable(cur.pos + Vector2i(0, dz)):
+						continue
+				var step = 1.0 if (dx == 0 or dz == 0) else 1.414
+				var ng = cur.g + step
+				if open.has(nk):
+					if ng < open[nk].g:
+						open[nk].g = ng
+						open[nk].parent = cur
+				else:
+					open[nk] = {"pos": nb, "g": ng, "h": _heur(nb, end_grid), "parent": cur}
+	return []
+
+func _build_path(node) -> Array:
+	var path = []
+	var n = node
+	while n != null:
+		path.append(grid_to_world(n.pos))
+		n = n.parent
+	path.reverse()
+	if path.size() > 0:
+		path.remove_at(0)
+	return path
+
+func _heur(a: Vector2i, b: Vector2i) -> float:
+	return abs(a.x - b.x) + abs(a.y - b.y)
+
+func _gkey(pos: Vector2i) -> String:
+	return str(pos.x) + "," + str(pos.y)
+
+func world_to_grid(world_pos: Vector3) -> Vector2i:
+	return Vector2i(
+		int(floor((world_pos.x + GRID_OFFSET) / GRID_CELL)),
+		int(floor((world_pos.z + GRID_OFFSET) / GRID_CELL))
+	)
+
+func grid_to_world(grid_pos: Vector2i) -> Vector3:
+	return Vector3(
+		(grid_pos.x + 0.5) * GRID_CELL - GRID_OFFSET,
+		0,
+		(grid_pos.y + 0.5) * GRID_CELL - GRID_OFFSET
+	)
+
+func is_walkable(grid_pos: Vector2i) -> bool:
+	if grid_pos.x < 0 or grid_pos.x >= GRID_SIZE:
+		return false
+	if grid_pos.y < 0 or grid_pos.y >= GRID_SIZE:
+		return false
+	var key = grid_pos.x * 10000 + grid_pos.y
+	if _walk_cache.has(key):
+		return _walk_cache[key]
+	var world_pos = grid_to_world(grid_pos)
+	var space_state = get_world_3d().direct_space_state
+	var query = PhysicsRayQueryParameters3D.create(
+		world_pos + Vector3(0, 2.5, 0),
+		world_pos + Vector3(0, 0.3, 0)
+	)
+	query.exclude = [self.get_rid()]
+	if target:
+		query.exclude.append(target.get_rid())
+	var result = space_state.intersect_ray(query)
+	var walkable = result.is_empty()
+	_walk_cache[key] = walkable
+	return walkable
+
+func find_nearest_walkable(center: Vector2i) -> Vector2i:
+	if is_walkable(center):
+		return center
+	for r in range(1, 10):
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if abs(dx) != r and abs(dz) != r:
+					continue
+				var p = center + Vector2i(dx, dz)
+				if is_walkable(p):
+					return p
+	return Vector2i(-1, -1)

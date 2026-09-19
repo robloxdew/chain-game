@@ -1,0 +1,71 @@
+[gd_scene format=3 uid="uid://64cdun4b10py"]
+
+[ext_resource type="Script" uid="uid://b63t8ehahrub7" path="res://character_body_3d.gd" id="1_a202f"]
+[ext_resource type="Script" uid="uid://d0q4h02l1hxrw" path="res://chain.gd" id="2_noarx"]
+[ext_resource type="Script" uid="uid://e4l2opr4qypi" path="res://safehouse.gd" id="3_a0tk4"]
+[ext_resource type="Script" uid="uid://bohtwq1gqlgy" path="res://chain_spawn.gd" id="4_r3fl7"]
+[ext_resource type="Script" uid="uid://2pa02qtraskk" path="res://map_wall.gd" id="5_jka67"]
+
+[sub_resource type="CapsuleShape3D" id="CapsuleShape3D_g7b7a"]
+radius = 0.45
+height = 1.5
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_g7b7a"]
+size = Vector3(100, 0.5, 100)
+
+[sub_resource type="BoxMesh" id="BoxMesh_g7b7a"]
+size = Vector3(100, 0.5, 100)
+
+[sub_resource type="Sky" id="Sky_gyc6d"]
+
+[sub_resource type="Environment" id="Environment_g7b7a"]
+background_mode = 2
+sky = SubResource("Sky_gyc6d")
+fog_enabled = true
+fog_light_color = Color(0.49737608, 0.5759867, 0.49337536, 1)
+fog_density = 0.02
+
+[node name="Node3D" type="Node3D" unique_id=1970869926]
+
+[node name="CharacterBody3D" type="CharacterBody3D" parent="." unique_id=1995417292]
+script = ExtResource("1_a202f")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="CharacterBody3D" unique_id=140256864]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.75, 0)
+shape = SubResource("CapsuleShape3D_g7b7a")
+
+[node name="Camera3D" type="Camera3D" parent="CharacterBody3D" unique_id=182722724]
+transform = Transform3D(1, 0, 0, 0, 0.9848078, 0.1736482, 0, -0.1736482, 0.9848078, 0, 1.203747, -0.1707009)
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=329977367]
+
+[node name="StaticBody3D" type="StaticBody3D" parent="." unique_id=693394939]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="StaticBody3D" unique_id=1752514567]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+shape = SubResource("BoxShape3D_g7b7a")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="StaticBody3D" unique_id=1684838549]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.25, 0)
+mesh = SubResource("BoxMesh_g7b7a")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=754432476]
+environment = SubResource("Environment_g7b7a")
+
+[node name="DirectionalLight3D2" type="DirectionalLight3D" parent="." unique_id=989562013]
+transform = Transform3D(0.8660254, 0.35355338, -0.35355338, 0, 0.70710677, 0.70710677, 0.5, -0.6123724, 0.6123724, 0, 0, 0)
+light_color = Color(0.7490196, 0.8627451, 0, 1)
+
+[node name="Chain" type="CharacterBody3D" parent="." unique_id=406835593]
+script = ExtResource("2_noarx")
+
+[node name="Safehouse" type="Node3D" parent="." unique_id=1069346946]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -25, 0, -25)
+script = ExtResource("3_a0tk4")
+
+[node name="ChainSpawn" type="Node3D" parent="." unique_id=1681094191]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 30, 0, 30)
+script = ExtResource("4_r3fl7")
+
+[node name="MapWall" type="Node3D" parent="." unique_id=383306649]
+script = ExtResource("5_jka67")
