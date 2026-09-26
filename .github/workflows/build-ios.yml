@@ -15,23 +15,55 @@ jobs:
 
       - name: Download Project ZIP
         run: |
+          # 使用你最新的链接
           wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.10/chain.zip"
           unzip game_project.zip -d game_project
-          echo "=== 解压后的目录结构 ==="
-          ls -la game_project/
+          echo "解压完成"
 
-      - name: Find Project Root Path
-        id: find_project
+      - name: Force Fix Config on Cloud
         run: |
-          # 动态查找 project.godot 所在路径
-          PROJECT_PATH=$(find game_project -name "project.godot" -maxdepth 5 | head -n 1)
-          if [ -z "$PROJECT_PATH" ]; then
-            echo "❌ 错误：未找到 project.godot 文件！"
-            exit 1
+          # 自动寻找 project.godot 所在的目录
+          PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
+          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "=== 找到项目根目录: $PROJECT_PATH ==="
+          
+          # ⭐ 直接在云端覆盖 export_presets.cfg，彻底消除手机编辑产生的格式错误
+          cat > "$PROJECT_PATH/export_presets.cfg" << 'EOF'
+          [runnable_presets]
+          iOS="iOS"
+
+          [preset.0]
+          name="iOS"
+          platform="iOS"
+          export_filter="all_resources"
+          export_path=""
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          architectures/arm64=true
+          application/app_store_team_id="ABCDE12345"
+          application/export_method_debug=1
+          application/export_method_release=1
+          application/bundle_identifier="com.robloxdew.chaingame"
+          application/icon_interpolation=4
+          application/export_project_only=false
+          icons/icon_1024x1024="res://icon.png"
+          EOF
+          
+          # ⭐ 检查图标，如果缺失，从项目里自动找一张图重命名，或者生成占位图
+          if [ ! -f "$PROJECT_PATH/icon.png" ]; then
+            echo "⚠️ 项目内没有 icon.png，尝试自动寻找替代..."
+            FOUND_PNG=$(find "$PROJECT_PATH" -name "*.png" -exec ls -S {} + | head -n 1)
+            if [ -n "$FOUND_PNG" ]; then
+               cp "$FOUND_PNG" "$PROJECT_PATH/icon.png"
+               echo "已将 $FOUND_PNG 复制为 icon.png"
+            else
+               echo "⚠️ 未找到任何 PNG，写入 Base64 占位图"
+               echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > "$PROJECT_PATH/icon.png"
+            fi
           fi
-          PROJECT_DIR=$(dirname "$PROJECT_PATH")
-          echo "✅ 找到项目根目录: $PROJECT_DIR"
-          echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
+          echo "配置文件重写完成！"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
@@ -51,15 +83,14 @@ jobs:
 
       - name: Export Godot to Xcode
         run: |
-          # ⭐ 使用刚刚自动找到的路径
-          cd ${{ steps.find_project.outputs.project_dir }}
+          cd ${{ env.PROJECT_DIR }}
           mkdir -p build
-          godot --headless --path . --import 
+          godot --headless --path . --import
           godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
 
       - name: Build IPA (Unsigned)
         run: |
-          cd ${{ steps.find_project.outputs.project_dir }}/build
+          cd ${{ env.PROJECT_DIR }}/build
           xcodebuild archive \
             -project ios_project.xcodeproj \
             -scheme "ios_project" \
@@ -72,7 +103,7 @@ jobs:
 
       - name: Package IPA
         run: |
-          cd ${{ steps.find_project.outputs.project_dir }}/build
+          cd ${{ env.PROJECT_DIR }}/build
           mkdir -p Payload
           mv ios_project.xcarchive/Products/Applications/*.app Payload/
           zip -r chain_unsigned.ipa Payload
@@ -81,4 +112,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chain-unsigned-ipa
-          path: ${{ steps.find_project.outputs.project_dir }}/build/chain_unsigned.ipa
+          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
