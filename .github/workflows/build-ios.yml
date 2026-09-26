@@ -15,47 +15,14 @@ jobs:
 
       - name: Download Project ZIP
         run: |
+          # 如果你重新上传了，记得检查这里的链接是不是最新的
           wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
           unzip game_project.zip -d game_project
           echo "解压完成"
-
-      - name: Patch existing iOS Config
-        run: |
-          # 自动寻找 project.godot 所在的目录
+          # 找到项目根目录，设置环境变量
           PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
-          
-          # 删除可能残留的 .godot 缓存，迫使 Godot 重新扫描所有资源
-          rm -rf "$PROJECT_PATH/.godot"
-          cd "$PROJECT_PATH"
-          
-          echo "=== 原始配置中关于 iOS 的关键字段 ==="
-          grep -E "app_store_team_id|bundle_identifier|export_project_only|icon_1024" export_presets.cfg || true
-          
-          # ⭐ 精准修补 4 个导致报错的关键字段，其他默认字段全部保留！
-          # 1. 修正 Team ID (10位字母数字)
-          sed -i '' 's/application\/app_store_team_id=.*/application\/app_store_team_id="ABCDE12345"/' export_presets.cfg
-          # 2. 修正 Bundle Identifier
-          sed -i '' 's/application\/bundle_identifier=.*/application\/bundle_identifier="com.robloxdew.chaingame"/' export_presets.cfg
-          # 3. 只导出工程文件，避免 Godot 在云端自己调用 Xcode 失败
-          sed -i '' 's/application\/export_project_only=.*/application\/export_project_only=true/' export_presets.cfg
-          # 4. 强制指定图标路径
-          sed -i '' 's/icons\/icon_1024x1024=.*/icons\/icon_1024x1024="res:\/\/icon.png"/' export_presets.cfg
-          
-          echo "=== 修补后的关键字段 ==="
-          grep -E "app_store_team_id|bundle_identifier|export_project_only|icon_1024" export_presets.cfg
-
-      - name: Ensure Valid Icon Exists
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          # ⭐ 暴力修复图标：如果图标缺失或者不规范，直接从 macOS 系统图标库生成一个标准 1024x1024 的 PNG
-          echo "从 macOS 系统图标生成标准 icon.png..."
-          cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
-          sips -s format png icon.icns --out icon.png
-          sips -z 1024 1024 icon.png --out icon.png
-          rm icon.icns
-          echo "图标处理完毕"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
@@ -77,9 +44,7 @@ jobs:
         run: |
           cd ${{ env.PROJECT_DIR }}
           mkdir -p build
-          # 先进行全量导入（让刚生成的图标被正确识别）
           godot --headless --path . --import
-          # 导出 Xcode 工程
           godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
 
       - name: Build IPA (Unsigned)
