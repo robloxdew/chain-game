@@ -15,56 +15,87 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          # ⭐ 使用最新 1.12 标签的链接
           wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
           unzip game_project.zip -d game_project
           echo "解压完成"
 
-      - name: Patch iOS Config
+      - name: Force Rewrite Config and Icon
         run: |
           PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
           
-          # ⭐ 清理可能残留的 .godot 缓存
+          # 删除可能存在的 .godot 缓存
           rm -rf "$PROJECT_PATH/.godot"
           
-          cd "$PROJECT_PATH"
-          # 备份原始配置
-          cp export_presets.cfg export_presets.cfg.bak
-          
-          echo "=== 原地修补 export_presets.cfg 的关键字段 ==="
-          # 修改 Team ID 为 10 位合法格式
-          sed -i '' 's/application\/app_store_team_id=.*/application\/app_store_team_id="ABCDE12345"/' export_presets.cfg
-          # 修改 Bundle ID 为你自己的标识
-          sed -i '' 's/application\/bundle_identifier=.*/application\/bundle_identifier="com.robloxdew.chaingame"/' export_presets.cfg
-          # 修改导出模式为仅导出工程文件（不尝试在云端编译）
-          sed -i '' 's/application\/export_project_only=.*/application\/export_project_only=true/' export_presets.cfg
-          # 强制指定图标路径
-          sed -i '' 's/icons\/icon_1024x1024=.*/icons\/icon_1024x1024="res:\/\/icon.png"/' export_presets.cfg
-          
-          echo "=== 修补后的关键字段 ==="
-          grep -E "app_store_team_id|bundle_identifier|export_project_only|icon_1024" export_presets.cfg
+          # ⭐ 彻底重写 iOS 配置文件，包含所有必需字段
+          cat > "$PROJECT_PATH/export_presets.cfg" << 'EOF'
+          [runnable_presets]
+          iOS="iOS"
 
-      - name: Ensure Icon Exists
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          if [ ! -f "icon.png" ]; then
-             echo "⚠️ 没有 icon.png，尝试从项目中找一张图片代替..."
-             FOUND_PNG=$(find . -name "*.png" -exec ls -S {} + | head -n 1)
-             if [ -n "$FOUND_PNG" ]; then
-                sips -z 1024 1024 "$FOUND_PNG" --out "icon.png"
-             else
-                echo "⚠️ 项目里没有任何图片，生成一张纯白占位图..."
-                echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > tmp_icon.png
-                sips -z 1024 1024 tmp_icon.png --out icon.png
-                rm tmp_icon.png
-             fi
+          [preset.0]
+          name="iOS"
+          platform="iOS"
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+          patches=PackedStringArray()
+          patch_delta_encoding=false
+          patch_delta_compression_level_zstd=19
+          patch_delta_min_reduction=0.1
+          patch_delta_include_filters="*"
+          patch_delta_exclude_filters=""
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          seed=0
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=2
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          architectures/arm64=true
+          application/app_store_team_id="ABCDE12345"
+          application/export_method_debug=1
+          application/export_method_release=1
+          application/code_sign_identity_debug=""
+          application/code_sign_identity_release=""
+          application/provisioning_profile_specifier_debug=""
+          application/provisioning_profile_specifier_release=""
+          application/bundle_identifier="com.robloxdew.chaingame"
+          application/signature=""
+          application/short_version="1.0"
+          application/version="1.0"
+          application/additional_plist_content=""
+          application/icon_interpolation=4
+          application/export_project_only=true
+          application/min_ios_version="14.0"
+          icons/icon_1024x1024="res://icon.png"
+          EOF
+          
+          # ⭐ 暴力修复图标：如果原图标不是标准 1024x1024，强制转换
+          cd "$PROJECT_PATH"
+          if [ -f "icon.png" ]; then
+            echo "发现图标，强制转换为标准 1024x1024..."
+            sips -z 1024 1024 icon.png --out icon.png
           else
-             # 如果已经有了，强制调整为 1024x1024 尺寸（iOS 要求）
-             sips -z 1024 1024 icon.png --out icon.png
+            echo "⚠️ 没有找到 icon.png，从项目中找一张图代替..."
+            FOUND_PNG=$(find . -name "*.png" -exec ls -S {} + | head -n 1)
+            if [ -n "$FOUND_PNG" ]; then
+               sips -z 1024 1024 "$FOUND_PNG" --out icon.png
+            else
+               # 没图就生成一张纯白占位图
+               echo "⚠️ 项目里连一张图都没有，生成纯白占位图..."
+               echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=" | base64 -d > tmp_icon.png
+               sips -z 1024 1024 tmp_icon.png --out icon.png
+               rm tmp_icon.png
+            fi
           fi
-          echo "图标处理完毕"
+          echo "配置文件与图标修复完毕"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
