@@ -23,76 +23,28 @@ jobs:
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
           rm -rf "$PROJECT_PATH/.godot"
 
-      - name: Force Perfect Config and Icon
+      - name: Force Config and Icon via Python
         run: |
+          # ⭐ 核心修复：使用 Python 生成配置文件。不使用 cat/sed/base64，彻底避开所有隐形字符问题
+          python3 -c '
+          import os
+          project_dir = os.environ["PROJECT_DIR"]
+          config_path = os.path.join(project_dir, "export_presets.cfg")
+          content = "[runnable_presets]\niOS=\"iOS\"\n\n[preset.0]\nname=\"iOS\"\nplatform=\"iOS\"\ndedicated_server=false\ncustom_features=\"\"\nexport_filter=\"all_resources\"\ninclude_filter=\"\"\nexclude_filter=\"\"\nexport_path=\"\"\npatches=PackedStringArray()\npatch_delta_encoding=false\npatch_delta_compression_level_zstd=19\npatch_delta_min_reduction=0.1\npatch_delta_include_filters=\"*\"\npatch_delta_exclude_filters=\"\"\nencryption_include_filters=\"\"\nencryption_exclude_filters=\"\"\nseed=0\nencrypt_pck=false\nencrypt_directory=false\nscript_export_mode=2\n\n[preset.0.options]\ncustom_template/debug=\"\"\ncustom_template/release=\"\"\narchitectures/arm64=true\napplication/app_store_team_id=\"ABCDE12345\"\napplication/export_method_debug=1\napplication/export_method_release=1\napplication/code_sign_identity_debug=\"\"\napplication/code_sign_identity_release=\"\"\napplication/provisioning_profile_specifier_debug=\"\"\napplication/provisioning_profile_specifier_release=\"\"\napplication/bundle_identifier=\"com.robloxdew.chaingame\"\napplication/signature=\"\"\napplication/short_version=\"1.0\"\napplication/version=\"1.0\"\napplication/additional_plist_content=\"\"\napplication/icon_interpolation=4\napplication/export_project_only=true\napplication/targeted_device_family=0\napplication/min_ios_version=\"14.0\"\nstoryboard/image_scale_mode=0\nstoryboard/use_custom_bg_color=false\nstoryboard/custom_bg_color=Color(0, 0, 0, 1)\nicons/icon_1024x1024=\"res://icon.png\""
+          with open(config_path, "w", encoding="utf-8", newline="\n") as f:
+              f.write(content)
+          print("配置文件已通过 Python 完美生成！")
+          '
+          
           cd ${{ env.PROJECT_DIR }}
-          
-          # 写一份绝对纯净的配置文件，清理所有缩进
-          cat > export_presets.cfg << 'EOF'
-          [runnable_presets]
-          iOS="iOS"
-
-          [preset.0]
-          name="iOS"
-          platform="iOS"
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path=""
-          patches=PackedStringArray()
-          patch_delta_encoding=false
-          patch_delta_compression_level_zstd=19
-          patch_delta_min_reduction=0.1
-          patch_delta_include_filters="*"
-          patch_delta_exclude_filters=""
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          seed=0
-          encrypt_pck=false
-          encrypt_directory=false
-          script_export_mode=2
-
-          [preset.0.options]
-          custom_template/debug=""
-          custom_template/release=""
-          architectures/arm64=true
-          application/app_store_team_id="ABCDE12345"
-          application/export_method_debug=1
-          application/export_method_release=1
-          application/code_sign_identity_debug=""
-          application/code_sign_identity_release=""
-          application/provisioning_profile_specifier_debug=""
-          application/provisioning_profile_specifier_release=""
-          application/bundle_identifier="com.robloxdew.chaingame"
-          application/signature=""
-          application/short_version="1.0"
-          application/version="1.0"
-          application/additional_plist_content=""
-          application/icon_interpolation=4
-          application/export_project_only=true
-          application/targeted_device_family=0
-          application/min_ios_version="14.0"
-          storyboard/image_scale_mode=0
-          storyboard/use_custom_bg_color=false
-          storyboard/custom_bg_color=Color(0, 0, 0, 1)
-          icons/icon_1024x1024="res://icon.png"
-          EOF
-
-          # 清理缩进
-          sed -i '' 's/^[[:space:]]*//' export_presets.cfg
-          
-          # ⭐ 核心修复：直接删掉那个不规范的 icon.png，不要尝试转换它
+          # ⭐ 彻底删除你的本地 icon.png（它是 WebP 格式，会导致 sips 崩溃），并生成系统标准图标
           rm -f icon.png
-          
-          # 用系统自带图标生成一个绝对合规的 1024x1024 PNG
-          echo "生成标准图标..."
+          echo "正在生成标准的 1024x1024 PNG 图标..."
           cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
           sips -s format png icon.icns --out icon.png
           sips -z 1024 1024 icon.png --out icon.png
           rm icon.icns
-          echo "图标与配置修复完毕"
+          echo "图标与配置已修复完毕，准备导出！"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
