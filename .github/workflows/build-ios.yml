@@ -32,7 +32,6 @@ jobs:
           open('export_presets.cfg', 'w').write(c)
           print("patched export_presets.cfg")
           PYEOF
-          ls -la "$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable/" | head -25
 
       - name: Generate Absolute Standard Icon
         run: |
@@ -56,6 +55,9 @@ jobs:
           curl -L -o templates.tpz $TEMPLATE_URL
           unzip -q templates.tpz -d templates_temp
           mv templates_temp/templates/* "$TEMPLATE_DIR/"
+          # Godot 4.7.2 expects lowercase template names (ios.zip)
+          [ -f "$TEMPLATE_DIR/iOS.zip" ] && mv -f "$TEMPLATE_DIR/iOS.zip" "$TEMPLATE_DIR/ios.zip" || true
+          ls "$TEMPLATE_DIR/"
 
       - name: Export Godot to Xcode
         run: |
