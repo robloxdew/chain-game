@@ -15,22 +15,23 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          # ⭐ 这里换成了你刚刚发我的最新链接
           wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.10/chain.zip"
           unzip game_project.zip -d game_project
           echo "=== 解压后的目录结构 ==="
           ls -la game_project/
-          
+
       - name: Find Project Root Path
+        id: find_project
         run: |
-          # 自动寻找 project.godot 所在的目录，完美解决套娃文件夹问题
-          PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
-          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
-          echo "=== 找到项目根目录: $PROJECT_PATH ==="
-          echo "=== 检查 export_presets.cfg 关键配置 ==="
-          grep -E "name=\"iOS\"|app_store_team_id|bundle_identifier|icon_1024" "$PROJECT_PATH/export_presets.cfg" || true
-          echo "=== 检查 icon.png 是否存在 ==="
-          ls -la "$PROJECT_PATH/icon.png" || echo "⚠️ 警告: 项目根目录下没有找到 icon.png，请务必添加！"
+          # 动态查找 project.godot 所在路径
+          PROJECT_PATH=$(find game_project -name "project.godot" -maxdepth 5 | head -n 1)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "❌ 错误：未找到 project.godot 文件！"
+            exit 1
+          fi
+          PROJECT_DIR=$(dirname "$PROJECT_PATH")
+          echo "✅ 找到项目根目录: $PROJECT_DIR"
+          echo "project_dir=$PROJECT_DIR" >> $GITHUB_OUTPUT
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
@@ -50,14 +51,15 @@ jobs:
 
       - name: Export Godot to Xcode
         run: |
-          cd ${{ env.PROJECT_DIR }}
+          # ⭐ 使用刚刚自动找到的路径
+          cd ${{ steps.find_project.outputs.project_dir }}
           mkdir -p build
-          godot --headless --path . --import --verbose 
-          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj --verbose
+          godot --headless --path . --import 
+          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
 
       - name: Build IPA (Unsigned)
         run: |
-          cd ${{ env.PROJECT_DIR }}/build
+          cd ${{ steps.find_project.outputs.project_dir }}/build
           xcodebuild archive \
             -project ios_project.xcodeproj \
             -scheme "ios_project" \
@@ -70,7 +72,7 @@ jobs:
 
       - name: Package IPA
         run: |
-          cd ${{ env.PROJECT_DIR }}/build
+          cd ${{ steps.find_project.outputs.project_dir }}/build
           mkdir -p Payload
           mv ios_project.xcarchive/Products/Applications/*.app Payload/
           zip -r chain_unsigned.ipa Payload
@@ -79,4 +81,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: chain-unsigned-ipa
-          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
+          path: ${{ steps.find_project.outputs.project_dir }}/build/chain_unsigned.ipa
