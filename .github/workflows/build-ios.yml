@@ -23,11 +23,11 @@ jobs:
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
           rm -rf "$PROJECT_PATH/.godot"
 
-      - name: Force Perfect Config and Icon (macOS 语法修正版)
+      - name: Force Perfect Config and Icon
         run: |
           cd ${{ env.PROJECT_DIR }}
           
-          # ⭐ 核心修复：用纯文本写入，然后用 sed 清理所有前导空格
+          # 写一份绝对纯净的配置文件，清理所有缩进
           cat > export_presets.cfg << 'EOF'
           [runnable_presets]
           iOS="iOS"
@@ -80,24 +80,19 @@ jobs:
           icons/icon_1024x1024="res://icon.png"
           EOF
 
-          # ⭐ 关键修复：macOS 的 sed -i 必须加一个空字符串 ''，否则会报 extra characters
+          # 清理缩进
           sed -i '' 's/^[[:space:]]*//' export_presets.cfg
           
-          echo "===== 最终生成的 export_presets.cfg ====="
-          cat export_presets.cfg
-          echo "========================================="
-
-          # 暴力生成绝对合规的 1024x1024 图标
-          if [ ! -f "icon.png" ]; then
-            echo "生成标准图标..."
-            cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
-            sips -s format png icon.icns --out icon.png
-            sips -z 1024 1024 icon.png --out icon.png
-            rm icon.icns
-          else
-            sips -z 1024 1024 icon.png --out icon.png
-          fi
-          echo "配置文件与图标已在云端完美修复"
+          # ⭐ 核心修复：直接删掉那个不规范的 icon.png，不要尝试转换它
+          rm -f icon.png
+          
+          # 用系统自带图标生成一个绝对合规的 1024x1024 PNG
+          echo "生成标准图标..."
+          cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
+          sips -s format png icon.icns --out icon.png
+          sips -z 1024 1024 icon.png --out icon.png
+          rm icon.icns
+          echo "图标与配置修复完毕"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
