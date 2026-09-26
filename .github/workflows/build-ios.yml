@@ -25,7 +25,7 @@ jobs:
 
       - name: Force Config and Icon via Python
         run: |
-          # ⭐ 核心修复：使用 Python 生成配置文件。不使用 cat/sed/base64，彻底避开所有隐形字符问题
+          # ⭐ 核心修复：使用 Python 生成配置文件，避免任何缩进、换行符问题
           python3 -c '
           import os
           project_dir = os.environ["PROJECT_DIR"]
