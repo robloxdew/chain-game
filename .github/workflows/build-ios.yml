@@ -31,6 +31,15 @@ jobs:
           c = re.sub(r'application/app_store_team_id="[^"]*"', 'application/app_store_team_id="DEWRB12345"', c)
           open('export_presets.cfg', 'w').write(c)
           print("patched export_presets.cfg")
+          # Enable ETC2/ASTC texture compression (required for iOS export validation)
+          pg = open('project.godot').read()
+          if 'import_etc2_astc' not in pg:
+              if '[rendering]' in pg:
+                  pg = pg.replace('[rendering]', '[rendering]\n\ntextures/vram_compression/import_etc2_astc=true', 1)
+              else:
+                  pg += '\n[rendering]\n\ntextures/vram_compression/import_etc2_astc=true\n'
+              open('project.godot', 'w').write(pg)
+              print("enabled etc2_astc")
           PYEOF
 
       - name: Generate Absolute Standard Icon
