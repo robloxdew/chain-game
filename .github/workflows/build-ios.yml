@@ -1,102 +1,113 @@
-name: Build iOS IPA
+name: Build iOS IPA from Release
 
 on:
-  workflow_dispatch:
+  release:
+    types: [published]
 
 jobs:
   build-ios:
     runs-on: macos-latest
+    timeout-minutes: 60
     permissions:
-      contents: read
+      contents: write # 必须加，用来回传 IPA
+    env:
+      GODOT_VERSION: "4.7.2"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Download Project ZIP
+      - name: Free up disk space on macOS runner
         run: |
-          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.13/chain.zip"
-          unzip game_project.zip -d game_project
-          PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
+          df -h
+          sudo rm -rf /Applications/Android\ Studio.app
+          sudo rm -rf ~/Library/Android
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /opt/ghc
+          df -h
+
+      - name: Download chain.zip from Release
+        uses: dsaltares/fetch-gh-release-asset@master
+        with:
+          repo: ${{ github.repository }}
+          tag: ${{ github.event.release.tag_name }}
+          file: chain.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unzip and Locate Project
+        run: |
+          unzip -q chain.zip -d game/
+          PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "=== 找到项目根目录: $PROJECT_PATH ==="
 
-      - name: Patch iOS Export Config (use repo full preset)
+      - name: Fix project.godot enable ETC2/ASTC
         run: |
           cd ${{ env.PROJECT_DIR }}
-          python3 - <<'PYEOF'
-          import re
-          c = open('export_presets.cfg').read()
-          c = re.sub(r'icons/icon_1024x1024="[^"]*"', 'icons/icon_1024x1024="res://icon.png"', c)
-          c = re.sub(r'icons/app_store_1024x1024="[^"]*"', 'icons/app_store_1024x1024="res://icon.png"', c)
-          c = re.sub(r'application/app_store_team_id="[^"]*"', 'application/app_store_team_id="DEWRB12345"', c)
-          open('export_presets.cfg', 'w').write(c)
-          print("patched export_presets.cfg")
-          # Enable ETC2/ASTC texture compression (required for iOS export validation)
-          pg = open('project.godot').read()
-          if 'import_etc2_astc' not in pg:
-              if '[rendering]' in pg:
-                  pg = pg.replace('[rendering]', '[rendering]\n\ntextures/vram_compression/import_etc2_astc=true', 1)
-              else:
-                  pg += '\n[rendering]\n\ntextures/vram_compression/import_etc2_astc=true\n'
-              open('project.godot', 'w').write(pg)
-              print("enabled etc2_astc")
-          PYEOF
-
-      - name: Generate Absolute Standard Icon
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
-          sips -s format png icon.icns --out icon.png
-          sips -z 1024 1024 icon.png --out icon.png
-          rm icon.icns
+          if ! grep -q "\[importer_defaults\]" project.godot; then
+            echo "" >> project.godot
+            echo "[importer_defaults]" >> project.godot
+            echo "texture = {" >> project.godot
+            echo "\"compress/mobile\" = 1" >> project.godot
+            echo "\"compress/mobile_format\" = 1" >> project.godot
+            echo "}" >> project.godot
+            echo "✅ 已成功添加 ETC2/ASTC 配置"
+          else
+            echo "⏭️ 已存在配置，跳过"
+          fi
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.7.2
+          version: ${{ env.GODOT_VERSION }}
           use-dotnet: false
 
-      - name: Download Godot Export Templates
+      - name: Install Godot iOS export template (GitHub源，curl下载)
         run: |
-          TEMPLATE_URL="https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
           TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
           mkdir -p "$TEMPLATE_DIR"
-          curl -L -o templates.tpz $TEMPLATE_URL
-          unzip -q templates.tpz -d templates_temp
-          mv templates_temp/templates/* "$TEMPLATE_DIR/"
-          # Godot 4.7.2 expects lowercase template names (ios.zip)
-          [ -f "$TEMPLATE_DIR/iOS.zip" ] && mv -f "$TEMPLATE_DIR/iOS.zip" "$TEMPLATE_DIR/ios.zip" || true
-          ls "$TEMPLATE_DIR/"
+          cd "$TEMPLATE_DIR"
+          curl -L -O https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          mv templates/* .
+          rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          [ -f "iOS.zip" ] && mv iOS.zip ios.zip || true
+          echo "✅ 模板安装完成"
 
-      - name: Export Godot to Xcode
+      - name: Godot export Xcode project
         run: |
           cd ${{ env.PROJECT_DIR }}
           mkdir -p build
-          godot --headless --path . --import
           godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
 
-      - name: Build IPA (Unsigned)
+      - name: Build Xcode project (Unsigned IPA)
         run: |
           cd ${{ env.PROJECT_DIR }}/build
+          # ⭐ 动态获取 Scheme 名字
+          SCHEME=$(xcodebuild -list -project ios_project.xcodeproj | grep -A1 "Schemes:" | tail -n1 | xargs)
+          if [ -z "$SCHEME" ]; then
+            SCHEME="ios_project" # 兜底
+          fi
+          echo "使用 Scheme: $SCHEME"
+          
+          # ⭐ 彻底禁用签名
           xcodebuild archive \
             -project ios_project.xcodeproj \
-            -scheme "ios_project" \
+            -scheme "$SCHEME" \
             -archivePath ios_project.xcarchive \
             -configuration Release \
             -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO
+            CODE_SIGNING_REQUIRED=NO
 
-      - name: Package IPA
-        run: |
-          cd ${{ env.PROJECT_DIR }}/build
+          # ⭐ 查找 .app 打包IPA
           mkdir -p Payload
-          mv ios_project.xcarchive/Products/Applications/*.app Payload/
-          zip -r chain_unsigned.ipa Payload
+          find ios_project.xcarchive/Products -name "*.app" -exec cp -r {} Payload/ \;
+          zip -qr chain_unsigned.ipa Payload
 
-      - name: Upload IPA
-        uses: actions/upload-artifact@v4
+      - name: Upload unsigned IPA to Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: chain-unsigned-ipa
-          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
+          files: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
+          token: ${{ secrets.GITHUB_TOKEN }}
