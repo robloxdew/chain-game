@@ -15,7 +15,8 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/7891/chain.zip"
+          # 已更新为你的最新 Release 链接
+          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.10/chain.zip"
           unzip game_project.zip -d game_project
           echo "=== 解压后的目录结构 ==="
           ls -la game_project/
@@ -31,24 +32,22 @@ jobs:
       - name: Download Godot Export Templates (macOS fixed)
         run: |
           TEMPLATE_URL="https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz"
-          # ⭐ 修复：使用 macOS 环境的默认 Godot 模板路径
           TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
           mkdir -p "$TEMPLATE_DIR"
           curl -L -o templates.tpz $TEMPLATE_URL
           unzip -q templates.tpz -d templates_temp
-          # 将解压出来的 templates 文件夹里的内容全部移过去
           mv templates_temp/templates/* "$TEMPLATE_DIR/"
           echo "导出模板安装完成，检查路径内容："
           ls -la "$TEMPLATE_DIR/"
 
       - name: Export Godot to Xcode
         run: |
-          # 如果前面 find 命令显示 project.godot 在子文件夹里
-          # 比如 game_project/chain/project.godot，请把下面改成 cd game_project/chain
+          # ⚠️ 根据上一步 find 的结果，确认这里的路径
+          # 如果 project.godot 在 game_project/chain 里，请改成 cd game_project/chain
           cd game_project
           mkdir -p build
-          godot --headless --path . --import 
-          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
+          godot --headless --path . --import --verbose
+          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj --verbose
 
       - name: Build IPA (Unsigned)
         run: |
