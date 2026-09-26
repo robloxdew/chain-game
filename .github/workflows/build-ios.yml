@@ -41,21 +41,6 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
 
-      - name: Fix project.godot enable ETC2/ASTC
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          if ! grep -q "\[importer_defaults\]" project.godot; then
-            echo "" >> project.godot
-            echo "[importer_defaults]" >> project.godot
-            echo "texture = {" >> project.godot
-            echo "\"compress/mobile\" = 1" >> project.godot
-            echo "\"compress/mobile_format\" = 1" >> project.godot
-            echo "}" >> project.godot
-            echo "✅ 已成功添加 ETC2/ASTC 配置"
-          else
-            echo "⏭️ 已存在配置，跳过"
-          fi
-
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
         with:
