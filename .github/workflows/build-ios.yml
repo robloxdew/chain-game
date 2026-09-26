@@ -16,7 +16,7 @@ jobs:
       - name: Download Project ZIP
         run: |
           # 使用你最新的链接
-          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.10/chain.zip"
+          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
           unzip game_project.zip -d game_project
           echo "解压完成"
 
