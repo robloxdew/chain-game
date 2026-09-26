@@ -15,8 +15,8 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          # 使用你最新的链接
-          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
+          # ⚠️ 请确保这里的链接是你最新的 chain1.12 链接
+          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/chain1.12/chain.zip"
           unzip game_project.zip -d game_project
           echo "解压完成"
 
@@ -27,7 +27,7 @@ jobs:
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
           
-          # ⭐ 直接在云端覆盖 export_presets.cfg，彻底消除手机编辑产生的格式错误
+          # ⭐ 修复：补全了 include_filter 和 exclude_filter 两行
           cat > "$PROJECT_PATH/export_presets.cfg" << 'EOF'
           [runnable_presets]
           iOS="iOS"
@@ -36,6 +36,8 @@ jobs:
           name="iOS"
           platform="iOS"
           export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
           export_path=""
 
           [preset.0.options]
@@ -48,10 +50,11 @@ jobs:
           application/bundle_identifier="com.robloxdew.chaingame"
           application/icon_interpolation=4
           application/export_project_only=true
+          application/min_ios_version="14.0"
           icons/icon_1024x1024="res://icon.png"
           EOF
           
-          # 检查图标，如果缺失，从项目里自动找一张图重命名，或者生成占位图
+          # 检查图标，如果缺失，自动找一张替代
           if [ ! -f "$PROJECT_PATH/icon.png" ]; then
             echo "⚠️ 项目内没有 icon.png，尝试自动寻找替代..."
             FOUND_PNG=$(find "$PROJECT_PATH" -name "*.png" -exec ls -S {} + | head -n 1)
