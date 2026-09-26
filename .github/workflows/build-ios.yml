@@ -21,6 +21,25 @@ jobs:
           PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
+          rm -rf "$PROJECT_PATH/.godot"
+
+      - name: Force Perfect Config via Base64 and Generate Icon
+        run: |
+          # ⭐ 核心修复：使用 Base64 直接生成绝对纯净的 export_presets.cfg，彻底避开手机编辑器的BOM和缩进问题
+          echo "W3J1bm5hYmxlX3ByZXNldHNdCmlPUz0iaU9TIgoKW3ByZXNldC4wXQpuYW1lPSJpT1MiCnBsYXRmb3JtPSJpT1MiCmRlZGljYXRlZF9zZXJ2ZXI9ZmFsc2UKY3VzdG9tX2ZlYXR1cmVzPSIiCmV4cG9ydF9maWx0ZXI9ImFsbF9yZXNvdXJjZXMiCmluY2x1ZGVfZmlsdGVyPSIiCmV4Y2x1ZGVfZmlsdGVyPSIiCmV4cG9ydF9wYXRoPSIiCnBhdGNoZXM9UGFja2VkU3RyaW5nQXJyYXkoKQpwYXRjaF9kZWx0YV9lbmNvZGluZz1mYWxzZQpwYXRjaF9kZWx0YV9jb21wcmVzc2lvbl9sZXZlbF96c3RkPTE5CnBhdGNoX2RlbHRhX21pbl9yZWR1Y3Rpb249MC4xCnBhdGNoX2RlbHRhX2luY2x1ZGVfZmlsdGVycz0iKiIKcGF0Y2hfZGVsdGFfZXhjbHVkZV9maWx0ZXJzPSIiCmVuY3J5cHRpb25faW5jbHVkZV9maWx0ZXJzPSIiCmVuY3J5cHRpb25fZXhjbHVkZV9maWx0ZXJzPSIiCnNlZWQ9MAplbmNyeXB0X3Bjaz1mYWxzZQplbmNyeXB0X2RpcmVjdG9yeT1mYWxzZQpzY3JpcHRfZXhwb3J0X21vZGU9MgoKW3ByZXNldC4wLm9wdGlvbnNdCmN1c3RvbV90ZW1wbGF0ZS9kZWJ1Zz0iIgpjdXN0b21fdGVtcGxhdGUvcmVsZWFzZT0iIgphcmNoaXRlY3R1cmVzL2FybTY0PXRydWUKYXBwbGljYXRpb24vYXBwX3N0b3JlX3RlYW1faWQ9IkFCQ0RFMTIzNDUiCmFwcGxpY2F0aW9uL2V4cG9ydF9tZXRob2RfZGVidWc9MQphcHBsaWNhdGlvbi9leHBvcnRfbWV0aG9kX3JlbGVhc2U9MQphcHBsaWNhdGlvbi9jb2RlX3NpZ25faWRlbnRpdHlfZGVidWc9IiIKYXBwbGljYXRpb24vY29kZV9zaWduX2lkZW50aXR5X3JlbGVhc2U9IiIKYXBwbGljYXRpb24vcHJvdmlzaW9uaW5nX3Byb2ZpbGVfc3BlY2lmaWVyX2RlYnVnPSIiCmFwcGxpY2F0aW9uL3Byb3Zpc2lvbmluZ19wcm9maWxlX3NwZWNpZmllcl9yZWxlYXNlPSIiCmFwcGxpY2F0aW9uL2J1bmRsZV9pZGVudGlmaWVyPSJjb20ucm9ibG94ZGV3LmNoYWluZ2FtZSIKYXBwbGljYXRpb24vc2lnbmF0dXJlPSIiCmFwcGxpY2F0aW9uL3Nob3J0X3ZlcnNpb249IjEuMCIKYXBwbGljYXRpb24vdmVyc2lvbj0iMS4wIgphcHBsaWNhdGlvbi9hZGRpdGlvbmFsX3BsaXN0X2NvbnRlbnQ9IiIKYXBwbGljYXRpb24vaWNvbl9pbnRlcnBvbGF0aW9uPTQKYXBwbGljYXRpb24vZXhwb3J0X3Byb2plY3Rfb25seT10cnVlCmFwcGxpY2F0aW9uL21pbl9pb3NfdmVyc2lvbj0iMTQuMCIKaWNvbnMvaWNvbl8xMDI0eDEwMjQ9InJlczovL2ljb24ucG5nIgo= | base64 -d > "${{ env.PROJECT_DIR }}/export_presets.cfg"
+          
+          cd "${{ env.PROJECT_DIR }}"
+          # ⭐ 暴力生成绝对合规的 1024x1024 图标
+          if [ ! -f "icon.png" ]; then
+            echo "生成标准图标..."
+            cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
+            sips -s format png icon.icns --out icon.png
+            sips -z 1024 1024 icon.png --out icon.png
+            rm icon.icns
+          else
+            sips -z 1024 1024 icon.png --out icon.png
+          fi
+          echo "配置文件与图标已在云端完美修复"
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
