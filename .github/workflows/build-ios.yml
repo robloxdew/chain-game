@@ -15,87 +15,14 @@ jobs:
 
       - name: Download Project ZIP
         run: |
+          # 你最新 1.12 标签的链接
           wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
           unzip game_project.zip -d game_project
           echo "解压完成"
+          # 寻找 project.godot 所在目录
           PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
-          rm -rf "$PROJECT_PATH/.godot"
-
-      - name: Fix Config and Generate Icon
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          
-          # ⭐ 核心修复1：先删除那个是 WebP 格式的惹事图标！
-          rm -f icon.png
-          
-          # ⭐ 核心修复2：使用系统图标生成一个绝对合规的 1024x1024 PNG
-          echo "正在生成标准图标..."
-          cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
-          sips -s format png icon.icns --out icon.png
-          sips -z 1024 1024 icon.png --out icon.png
-          rm icon.icns
-          echo "图标生成完毕"
-          
-          # ⭐ 核心修复3：写入绝对纯净的配置，并清理 YAML 带来的隐形缩进
-          cat > export_presets.cfg << 'EOF'
-          [runnable_presets]
-          iOS="iOS"
-
-          [preset.0]
-          name="iOS"
-          platform="iOS"
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path=""
-          patches=PackedStringArray()
-          patch_delta_encoding=false
-          patch_delta_compression_level_zstd=19
-          patch_delta_min_reduction=0.1
-          patch_delta_include_filters="*"
-          patch_delta_exclude_filters=""
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          seed=0
-          encrypt_pck=false
-          encrypt_directory=false
-          script_export_mode=2
-
-          [preset.0.options]
-          custom_template/debug=""
-          custom_template/release=""
-          architectures/arm64=true
-          application/app_store_team_id="ABCDE12345"
-          application/export_method_debug=1
-          application/export_method_release=1
-          application/code_sign_identity_debug=""
-          application/code_sign_identity_release=""
-          application/provisioning_profile_specifier_debug=""
-          application/provisioning_profile_specifier_release=""
-          application/bundle_identifier="com.robloxdew.chaingame"
-          application/signature=""
-          application/short_version="1.0"
-          application/version="1.0"
-          application/additional_plist_content=""
-          application/icon_interpolation=4
-          application/export_project_only=true
-          application/targeted_device_family=0
-          application/min_ios_version="14.0"
-          storyboard/image_scale_mode=0
-          storyboard/use_custom_bg_color=false
-          storyboard/custom_bg_color=Color(0, 0, 0, 1)
-          icons/icon_1024x1024="res://icon.png"
-          EOF
-          
-          # ⭐ 清理 YAML 产生的所有前导空格（这是配置错误的罪魁祸首）
-          sed -i '' 's/^[[:space:]]*//' export_presets.cfg
-          echo "配置文件已修复完毕"
-          echo "===== 检查配置的关键字段 ====="
-          grep -E "include_filter|app_store_team_id|bundle_identifier|icon_1024" export_presets.cfg
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
