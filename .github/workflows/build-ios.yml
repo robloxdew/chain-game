@@ -1,8 +1,7 @@
-name: Build iOS IPA from Release
+name: Build iOS IPA (Manual from Latest Release)
 
 on:
-  release:
-    types: [published]
+  workflow_dispatch: # ⭐ 改成了手动触发按钮
 
 jobs:
   build-ios:
@@ -10,6 +9,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write # 必须加，用来回传 IPA
+      actions: read
     env:
       GODOT_VERSION: "4.7.2"
 
@@ -17,22 +17,26 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Free up disk space on macOS runner
+      - name: Get Latest Release Tag
+        id: get_latest_tag
         run: |
-          df -h
-          sudo rm -rf /Applications/Android\ Studio.app
-          sudo rm -rf ~/Library/Android
-          sudo rm -rf /usr/local/share/boost
-          sudo rm -rf /opt/ghc
-          df -h
+          # 使用 gh 命令自动获取最新的 Release 标签
+          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -z "$LATEST_TAG" ]; then
+            echo "❌ 没有找到任何发行版！"
+            exit 1
+          fi
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "✅ 自动找到最新发行版: $LATEST_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Download chain.zip from Release
-        uses: dsaltares/fetch-gh-release-asset@master
-        with:
-          repo: ${{ github.repository }}
-          tag: ${{ github.event.release.tag_name }}
-          file: chain.zip
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download chain.zip from Latest Release
+        run: |
+          # 从最新发行版中下载 chain.zip
+          gh release download ${{ env.LATEST_TAG }} -p "chain.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Unzip and Locate Project
         run: |
@@ -40,6 +44,9 @@ jobs:
           PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
           echo "=== 找到项目根目录: $PROJECT_PATH ==="
+
+      # ⚠️ 注意：这里彻底删除了修改 project.godot 的步骤！
+      # 保证你的配置文件不会被云端写坏，保留你在 Godot 里改好的字体和配置。
 
       - name: Setup Godot
         uses: chickensoft-games/setup-godot@v2
@@ -68,14 +75,12 @@ jobs:
       - name: Build Xcode project (Unsigned IPA)
         run: |
           cd ${{ env.PROJECT_DIR }}/build
-          # ⭐ 动态获取 Scheme 名字
+          # 动态获取 Scheme
           SCHEME=$(xcodebuild -list -project ios_project.xcodeproj | grep -A1 "Schemes:" | tail -n1 | xargs)
-          if [ -z "$SCHEME" ]; then
-            SCHEME="ios_project" # 兜底
-          fi
+          if [ -z "$SCHEME" ]; then SCHEME="ios_project"; fi
           echo "使用 Scheme: $SCHEME"
           
-          # ⭐ 彻底禁用签名
+          # 彻底禁用签名编译
           xcodebuild archive \
             -project ios_project.xcodeproj \
             -scheme "$SCHEME" \
@@ -86,13 +91,20 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO
 
-          # ⭐ 查找 .app 打包IPA
+          # 查找 .app 打包 IPA
           mkdir -p Payload
           find ios_project.xcarchive/Products -name "*.app" -exec cp -r {} Payload/ \;
           zip -qr chain_unsigned.ipa Payload
 
-      - name: Upload unsigned IPA to Release
-        uses: softprops/action-gh-release@v2
+      - name: Upload IPA to Release
+        run: |
+          # 构建成功后，自动把 IPA 附加到最新的那个 Release 下
+          gh release upload ${{ env.LATEST_TAG }} ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload as Actions Artifact (Backup)
+        uses: actions/upload-artifact@v4
         with:
-          files: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: chain-unsigned-ipa
+          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
