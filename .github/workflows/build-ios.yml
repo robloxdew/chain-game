@@ -15,7 +15,7 @@ jobs:
 
       - name: Download Project ZIP
         run: |
-          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.12/chain.zip"
+          wget -O game_project.zip "https://github.com/robloxdew/chain-game/releases/download/1.13/chain.zip"
           unzip game_project.zip -d game_project
           PROJECT_PATH=$(find game_project -name "project.godot" -exec dirname {} \; | head -n 1)
           echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
