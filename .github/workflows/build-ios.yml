@@ -34,7 +34,7 @@ jobs:
 
       - name: Get Latest Release Tag
         run: |
-          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          LATEST_TAG=$(gh release list --limit 1 --exclude-drafts --exclude-prereleases --json tagName --jq '.[0].tagName')
           if [ -z "$LATEST_TAG" ]; then
             echo "❌ 没有找到任何发行版！"
             exit 1
@@ -142,6 +142,12 @@ jobs:
           version: ${{ env.GODOT_VERSION }}
           use-dotnet: false
 
+      # ✅ 新增：强制重新导入全部资源，生成缺失的 .godot/imported 缓存（解决字体/资源缺失报错）
+      - name: Reimport all Godot resources
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          godot --headless --path . --import
+
       - name: Install Godot iOS export template (GitHub源，curl下载)
         run: |
           TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
@@ -159,6 +165,10 @@ jobs:
           cd ${{ env.PROJECT_DIR }}
           mkdir -p build
           godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
+          if [ ! -d "build/ios_project.xcodeproj" ]; then
+            echo "❌ Godot导出失败，没有生成 ios_project.xcodeproj !"
+            exit 1
+          fi
 
       - name: Build Xcode project (Unsigned IPA)
         run: |
