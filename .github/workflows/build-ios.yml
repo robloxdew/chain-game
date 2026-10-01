@@ -146,20 +146,42 @@ jobs:
 
       - name: Install Godot iOS export template (GitHub源)
         run: |
-          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/4.7.2.stable"
+          TPZ_URL="https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz"
+          VDIR="${{ env.GODOT_VERSION }}.stable"
+          # 1) 标准 macOS 模板位置
+          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/$VDIR"
           mkdir -p "$TEMPLATE_DIR"
           cd "$TEMPLATE_DIR"
-          curl -L -O https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          curl -L -O "$TPZ_URL"
           unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
           mv templates/* .
           rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
           [ -f "iOS.zip" ] && mv iOS.zip ios.zip || true
-          echo "✅ 模板安装完成"
+          echo "✅ 模板安装完成 (标准位置: $TEMPLATE_DIR)"
+          ls -la "$TEMPLATE_DIR" | head -10
+          # 2) 若设置了 XDG_DATA_HOME（macOS runner 通常无，保险起见）
+          if [ -n "${XDG_DATA_HOME:-}" ]; then
+            XDG_DIR="$XDG_DATA_HOME/godot/export_templates/$VDIR"
+            mkdir -p "$XDG_DIR"
+            cp ios.zip "$XDG_DIR/" 2>/dev/null || true
+            echo "✅ 已同步到 XDG 位置: $XDG_DIR"
+            ls -la "$XDG_DIR"
+          fi
+          echo "=== find ios.zip ==="
+          find / -name "ios.zip" -path "*4.7.2.stable*" 2>/dev/null || true
 
       - name: Godot export Xcode project
         run: |
           cd ${{ env.PROJECT_DIR }}
           mkdir -p build
+          echo "=== 诊断: 模板查找环境 ==="
+          echo "HOME=$HOME"
+          echo "XDG_DATA_HOME=${XDG_DATA_HOME:-<unset>}"
+          echo "--- 候选目录 ---"
+          ls -la "$HOME/Library/Application Support/Godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || echo "标准位置不存在"
+          [ -n "${XDG_DATA_HOME:-}" ] && ls -la "$XDG_DATA_HOME/godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || true
+          echo "--- 项目图标 ---"
+          ls -la icon.png 2>/dev/null || echo "icon.png 缺失"
           godot --headless --path . --import
           godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
           if [ ! -d "build/ios_project.xcodeproj" ]; then
