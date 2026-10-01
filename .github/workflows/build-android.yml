@@ -214,11 +214,11 @@ jobs:
         run: |
           cd ${{ env.PROJECT_DIR }}
           # ⭐ 完全模拟 Godot 的 "Install Android Build Template" 逻辑：
-          #   1) res://android/.build_version：版本标识（Godot 导出时校验，缺失/不匹配会报
-          #      "no version info for it exists" / 版本不匹配）
-          GODOT_VERSION_FULL=$(godot --version)
+          #   1) res://android/.build_version：版本标识 = GODOT_VERSION_FULL_CONFIG（如 4.7.2.stable）。
+          #      ⚠ 注意：不能写 godot --version 的完整输出（带 official.<hash>），
+          #      Godot 导出校验比对的是配置版本号，写错会报 "Android build version mismatch"
           mkdir -p android
-          printf "%s" "$GODOT_VERSION_FULL" > android/.build_version
+          printf "%s" "${{ env.GODOT_VERSION }}.stable" > android/.build_version
           echo ".build_version = $(cat android/.build_version)"
           #   2) 解压 android_source.zip 到 res://android/build/
           mkdir -p android/build
