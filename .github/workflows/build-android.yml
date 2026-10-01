@@ -1,0 +1,235 @@
+name: Build Android APK (From Release)
+
+on:
+  workflow_dispatch: # 手动触发
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GODOT_VERSION: "4.7.2"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get Latest Release Tag
+        id: get_tag
+        run: |
+          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "✅ 自动找到最新发行版: $LATEST_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download chain.zip from Latest Release
+        run: |
+          gh release download ${{ env.LATEST_TAG }} -p "chain.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unzip and Locate Project
+        run: |
+          unzip -q chain.zip -d game/
+          PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "❌ 在chain.zip压缩包内找不到 project.godot！"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "=== 找到项目根目录: $PROJECT_PATH ==="
+          rm -rf "$PROJECT_PATH/.godot"
+
+      # ⭐ 重写 Android 导出预设 + 启用 ETC2/ASTC（Godot 硬性要求，缺失会静默校验失败）
+      - name: Force Write Android Config
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          CFG="export_presets.cfg"
+
+          # 提取包名，提取不到就用默认
+          BUNDLE_ID=$(grep -E "application/package/unique_name=" "$CFG" | cut -d'"' -f2 | head -n 1)
+          if [ -z "$BUNDLE_ID" ]; then BUNDLE_ID="com.dewrb.game"; fi
+          # 应用显示名
+          APP_NAME=$(grep -E "application/package/name=" "$CFG" | cut -d'"' -f2 | head -n 1)
+          if [ -z "$APP_NAME" ]; then APP_NAME="chain"; fi
+
+          cat > "$CFG" << EOF
+          [runnable_presets]
+          Android="Android"
+
+          [preset.0]
+          name="Android"
+          platform="Android"
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+          patches=PackedStringArray()
+          patch_delta_encoding=false
+          patch_delta_compression_level_zstd=19
+          patch_delta_min_reduction=0.1
+          patch_delta_include_filters="*"
+          patch_delta_exclude_filters=""
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          seed=0
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=2
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          graphics/2d/rendering_method="gl_compatibility"
+          graphics/2d/rendering_method_mobile="gl_compatibility"
+          graphics/3d/rendering_method="forward_plus"
+          graphics/3d/rendering_method_mobile="gl_compatibility"
+          application/package/unique_name="$BUNDLE_ID"
+          application/package/name="$APP_NAME"
+          application/package/signed=true
+          application/package/app_category=2
+          application/package/retain_data_on_uninstall=false
+          application/package/exclude_from_recents=false
+          application/package/show_in_launcher=true
+          application/package/launch_intent=""
+          application/package/icon=""
+          application/package/icon_adaptive_foreground=""
+          application/package/icon_adaptive_background=""
+          application/package/icon_adaptive_background_color=""
+          version/code=1
+          version/name="1.0"
+          application/config_keystore/debug="$HOME/.android/debug.keystore"
+          application/config_keystore/debug_user="androiddebugkey"
+          application/config_keystore/debug_password="android"
+          application/config_keystore/release="$HOME/.android/debug.keystore"
+          application/config_keystore/release_user="androiddebugkey"
+          application/config_keystore/release_password="android"
+          android_build_mode=1
+          gradle_build/use_gradle_build=true
+          gradle_build/gradle_build_directory=""
+          gradle_build/compress_native_libraries=false
+          gradle_build/export_format=1
+          gradle_build/min_sdk="24"
+          gradle_build/target_sdk="36"
+          gradle_build/build_tools="36.0.0"
+          EOF
+
+          # ⭐ 致命修复：强行删除每一行开头的空格，防止 Godot 解析器崩溃
+          sed -i 's/^[[:space:]]*//' "$CFG"
+          echo "=== 重写后的配置文件（关键行） ==="
+          grep -E "unique_name|signed|keystore/release|android_build_mode|export_format|target_sdk" "$CFG"
+
+          # ⭐ 启用 ETC2/ASTC 纹理压缩（Android/iOS 均要求，缺失时 Godot 静默校验失败）
+          python3 - <<'PYEOF'
+          pg = 'project.godot'
+          c = open(pg).read()
+          key = 'textures/vram_compression/import_etc2_astc'
+          if key + '=' not in c:
+              if '[rendering]' in c:
+                  c = c.replace('[rendering]', '[rendering]\n\n' + key + '=true', 1)
+              else:
+                  c += '\n[rendering]\n\n' + key + '=true\n'
+              open(pg, 'w').write(c)
+              print('ENABLED_ETC2_ASTC')
+          else:
+              print('SKIP_ETC2_ALREADY_SET')
+          PYEOF
+          grep -n "import_etc2_astc" project.godot
+
+      - name: Ensure Icon
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          if [ ! -f "icon.png" ]; then
+            echo "⚠️ 项目内没有 icon.png，生成一张占位图..."
+            python3 - <<'PYEOF'
+          from PIL import Image
+          img = Image.new('RGBA', (1024, 1024), (30, 144, 255, 255))
+          img.save('icon.png')
+          print('icon.png generated')
+          PYEOF
+          fi
+          ls -la icon.png
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK (platform 36 + build-tools)
+        run: |
+          SDK_ROOT=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+          SDK_MGR=$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -1)
+          echo "sdkmanager: $SDK_MGR"
+          yes | "$SDK_MGR" --licenses >/dev/null 2>&1 || true
+          echo "--- 已安装 platforms ---"
+          ls "$SDK_ROOT/platforms" 2>/dev/null || echo "(none)"
+          echo "--- 安装 android-36 / build-tools ---"
+          yes | "$SDK_MGR" "platforms;android-36" "build-tools;36.0.0" "platform-tools" >/dev/null 2>&1 || true
+          ls "$SDK_ROOT/platforms"
+          ls "$SDK_ROOT/build-tools" 2>/dev/null
+
+      - name: Generate Debug Keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" 2>&1 | tail -2
+          fi
+          ls -la "$HOME/.android/debug.keystore"
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+
+      - name: Install Godot Export Templates (all platforms)
+        run: |
+          TPL_DIR="$HOME/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable"
+          mkdir -p "$TPL_DIR"
+          cd "$TPL_DIR"
+          curl -L -O "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz"
+          unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          mv templates/* .
+          rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          echo "=== 模板文件 ==="
+          ls -la "$TPL_DIR" | grep -E "android|ios|version" || ls -la "$TPL_DIR"
+          cat "$TPL_DIR/version.txt"
+
+      - name: Godot Export Android APK (Gradle Build)
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          mkdir -p build
+          godot --headless --path . --import
+          godot --headless --path . --export-release "Android" build/chain_unsigned.apk
+          if [ ! -f "build/chain_unsigned.apk" ]; then
+            echo "❌ Godot导出失败，没有生成 APK !"
+            exit 1
+          fi
+          ls -la build/chain_unsigned.apk
+
+      - name: Upload APK to Release
+        run: |
+          gh release upload ${{ env.LATEST_TAG }} ${{ env.PROJECT_DIR }}/build/chain_unsigned.apk --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload as Actions Artifact (Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-unsigned-apk
+          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.apk
