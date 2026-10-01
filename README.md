@@ -3,7 +3,7 @@
 > 一个基于 **Godot 4.7.2** 的 3D 动作对战手游，玩家对抗 AI 敌人 **CHAIN**。
 
 ![Godot](https://img.shields.io/badge/Godot-4.7.2-blue)
-![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
+![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-brightgreen)
 ![Language](https://img.shields.io/badge/Language-GDScript-yellow)
 
 ---
@@ -17,8 +17,10 @@
 
 ## 📌 平台说明
 
-本项目主要以 **iOS 构建**为主。  
-如需 **Android 版本**，请自行导出构建（Godot 支持一键导出 APK）。
+本项目支持 **iOS** 与 **Android** 双平台。
+
+- **iOS**：主开发环境
+- **Android**：已同步适配，正在编译 / 打包中
 
 ---
 
@@ -59,7 +61,7 @@
 - **引擎**：Godot 4.7.2 stable
 - **语言**：GDScript
 - **渲染**：Vulkan Forward Mobile
-- **开发环境**：iOS（主） / Android（需自行构建）
+- **开发环境**：iOS（主） / Android（已适配）
 
 ---
 
@@ -68,47 +70,4 @@
 1. 安装 [Godot 4.7.2](https://godotengine.org/download)
 2. 克隆本仓库：
    ```bash
-   git clone https://github.com/your-username/chain.git
-   ```
-3. 用 Godot 打开 `project.godot`
-4. 按 F5 运行主场景
-5. **iOS 构建**：`项目 → 导出 → iOS`
-6. **Android 构建**（如需）：`项目 → 导出 → Android`，自行配置 SDK 与签名
-
----
-
-## 📁 目录结构
-
-```
-res://
-├── character_body_3d.gd    # 玩家全部逻辑
-├── chain.gd                # CHAIN AI
-├── map_wall.gd             # 地图围墙 + 开发者对话
-├── player_model/           # 玩家模型 (walk, choke, explode, parry)
-├── models/                 # CHAIN 模型 (run, idle, explode, choke...)
-└── ...
-```
-
-> 模型资源全部使用 `.gltf` 格式，缩放统一为 `0.25`。
-
----
-
-## 📝 版本
-
-**v1.25** — 弹反系统重构
-- ✅ 擦刀与格挡彻底分离
-- ✅ 擦刀：玩家免伤，双方不播动画，不进入 28s 冷却
-- ✅ 格挡：保留双方弹反动画 + 28s 冷却
-- ✅ 修复擦刀期间仍会被打到的问题
-
-详见 [CHANGELOG.md](CHANGELOG.md)
-
----
-
-## 📄 许可
-
-本项目仅供学习与交流使用。模型资源版权归原作者所有。
-
----
-
-*README 最后更新：2026-10-01*
+   git clone https://github.com/robloxdew/chain-game.git
