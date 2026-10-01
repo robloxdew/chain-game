@@ -210,6 +210,16 @@ jobs:
           ls -la "$TPL_DIR" | grep -E "android|ios|version" || ls -la "$TPL_DIR"
           cat "$TPL_DIR/version.txt"
 
+      - name: Install Android Build Template into Project
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          mkdir -p android/build
+          unzip -q -o "$HOME/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable/android_source.zip" -d android/build
+          echo "=== build template 结构 ==="
+          ls android/build/ | head -15
+          ls android/build/gradle/wrapper/ 2>/dev/null || echo "(无 gradle wrapper 目录)"
+          grep -E "compileSdk|targetSdk" android/build/config.gradle | head -3
+
       - name: Godot Export Android APK (Gradle Build)
         run: |
           cd ${{ env.PROJECT_DIR }}
