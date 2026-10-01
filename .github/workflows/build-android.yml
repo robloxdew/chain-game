@@ -213,13 +213,18 @@ jobs:
       - name: Install Android Build Template into Project
         run: |
           cd ${{ env.PROJECT_DIR }}
+          # ⭐ 完全模拟 Godot 的 "Install Android Build Template" 逻辑：
+          #   1) res://android/.build_version：版本标识（Godot 导出时校验，缺失/不匹配会报
+          #      "no version info for it exists" / 版本不匹配）
+          GODOT_VERSION_FULL=$(godot --version)
+          mkdir -p android
+          printf "%s" "$GODOT_VERSION_FULL" > android/.build_version
+          echo ".build_version = $(cat android/.build_version)"
+          #   2) 解压 android_source.zip 到 res://android/build/
           mkdir -p android/build
           unzip -q -o "$HOME/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable/android_source.zip" -d android/build
-          # ⭐ build template 版本信息：必须与 Godot 实际版本一致，否则导出报
-          #    "no version info for it exists" / 版本不匹配
-          GODOT_VERSION_FULL=$(godot --version)
-          printf "%s" "$GODOT_VERSION_FULL" > android/build/version.txt
-          echo "version.txt = $(cat android/build/version.txt)"
+          #   3) android/build/.gdignore：避免 Godot 扫描 build 目录资源
+          touch android/build/.gdignore
           echo "=== build template 结构 ==="
           ls android/build/ | head -15
           ls android/build/gradle/wrapper/ 2>/dev/null || echo "(无 gradle wrapper 目录)"
