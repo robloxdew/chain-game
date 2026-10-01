@@ -125,6 +125,25 @@ jobs:
           sed -i '' 's/^[[:space:]]*//' "$CFG"
           echo "=== 重写后的配置文件（关键行） ==="
           grep -E "include_filter|app_store_team_id|export_project_only|icon_1024" "$CFG"
+          
+          # ⭐ iOS 导出硬性要求：启用 ETC2/ASTC 纹理压缩
+          #   （缺少该配置时 Godot 导出校验会静默失败：configuration errors 且无错误详情）
+          python3 - <<'PYEOF'
+import os
+pg = 'project.godot'
+c = open(pg).read()
+key = 'textures/vram_compression/import_etc2_astc'
+if key + '=' not in c:
+    if '[rendering]' in c:
+        c = c.replace('[rendering]', '[rendering]\n\n' + key + '=true', 1)
+    else:
+        c += '\n[rendering]\n\n' + key + '=true\n'
+    open(pg, 'w').write(c)
+    print('✅ 已启用 ETC2/ASTC 纹理压缩 (import_etc2_astc=true)')
+else:
+    print('import_etc2_astc 已存在，跳过')
+PYEOF
+          grep -n "import_etc2_astc" project.godot
 
       - name: Ensure Absolute Valid Icon
         run: |
