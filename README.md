@@ -3,7 +3,7 @@
 > 一个基于 **Godot 4.7.2** 的 3D 动作对战手游，玩家对抗 AI 敌人 **CHAIN**。
 
 ![Godot](https://img.shields.io/badge/Godot-4.7.2-blue)
-![Platform](https://img.shields.io/badge/Platform-Android-green)
+![Platform](https://img.shields.io/badge/Platform-iOS%20%7C%20Android-lightgrey)
 ![Language](https://img.shields.io/badge/Language-GDScript-yellow)
 
 ---
@@ -12,6 +12,13 @@
 
 **CHAIN** 是一款手机端 3D 动作对战游戏。你将扮演一名战士，在开阔地图中与 AI 敌人 **CHAIN** 展开生死对决。  
 游戏包含完整的武器系统、弹反机制、体力管理、QTE 掐脖、自爆 AI 等丰富玩法。
+
+---
+
+## 📌 平台说明
+
+本项目主要以 **iOS 构建**为主。  
+如需 **Android 版本**，请自行导出构建（Godot 支持一键导出 APK）。
 
 ---
 
@@ -52,7 +59,7 @@
 - **引擎**：Godot 4.7.2 stable
 - **语言**：GDScript
 - **渲染**：Vulkan Forward Mobile
-- **测试设备**：Android / ARM Mali-G57 MC2
+- **开发环境**：iOS（主） / Android（需自行构建）
 
 ---
 
@@ -65,7 +72,8 @@
    ```
 3. 用 Godot 打开 `project.godot`
 4. 按 F5 运行主场景
-5. 导出 Android APK：`项目 → 导出 → Android`
+5. **iOS 构建**：`项目 → 导出 → iOS`
+6. **Android 构建**（如需）：`项目 → 导出 → Android`，自行配置 SDK 与签名
 
 ---
 
