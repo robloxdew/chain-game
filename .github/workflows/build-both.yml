@@ -4,12 +4,489 @@ on:
   workflow_dispatch: # 手动触发，一次并行构建双端
 
 jobs:
-  # iOS 构建（macOS runner，Godot 导出 Xcode 工程 → xcodebuild 打包未签名 IPA）
   build-ios:
-    uses: ./.github/workflows/build-ios.yml
-    secrets: inherit
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write # 允许下载和上传 Release 附件
+    env:
+      GODOT_VERSION: "4.7.2"
 
-  # Android 构建（Ubuntu runner，JDK17 + Android SDK36 + Gradle 打包签名 APK）
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          df -h
+          sudo rm -rf /Applications/Android\ Studio.app
+          sudo rm -rf ~/Library/Android
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /usr/local/share/boost
+          df -h
+
+      - name: Install GitHub CLI (gh)
+        run: |
+          brew install gh --quiet
+          gh --version
+
+      - name: Get Latest Release Tag
+        run: |
+          # ⭐ 修正正确的参数拼写 --exclude-pre-releases
+          LATEST_TAG=$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')
+          if [ -z "$LATEST_TAG" ]; then
+            echo "❌ 没有找到任何发行版！"
+            exit 1
+          fi
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "✅ 自动找到最新发行版: $LATEST_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download chain.zip from Latest Release
+        run: |
+          gh release download ${{ env.LATEST_TAG }} -p "chain.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unzip and Locate Project
+        run: |
+          unzip -q chain.zip -d game/
+          PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "❌ 在chain.zip压缩包内找不到 project.godot！"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "=== 找到项目根目录: $PROJECT_PATH ==="
+          
+          # ⭐ 确保剔除可能残留的 .godot 缓存（防止污染）
+          rm -rf "$PROJECT_PATH/.godot"
+
+      # ⭐ 核心修复：彻底重写标准 iOS 配置，并强制清除行首缩进空格
+      - name: Force Write Absolute Config
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          CFG="export_presets.cfg"
+          
+          # 提取包名，提取不到就用默认
+          BUNDLE_ID=$(grep "application/bundle_identifier=" "$CFG" | cut -d'"' -f2 | head -n 1)
+          if [ -z "$BUNDLE_ID" ]; then BUNDLE_ID="com.dewrb.game"; fi
+          
+          cat > "$CFG" << EOF
+          [runnable_presets]
+          iOS="iOS"
+
+          [preset.0]
+          name="iOS"
+          platform="iOS"
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+          patches=PackedStringArray()
+          patch_delta_encoding=false
+          patch_delta_compression_level_zstd=19
+          patch_delta_min_reduction=0.1
+          patch_delta_include_filters="*"
+          patch_delta_exclude_filters=""
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          seed=0
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=2
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          architectures/arm64=true
+          application/app_store_team_id="DEWRB12345"
+          application/export_method_debug=1
+          application/export_method_release=1
+          application/code_sign_identity_debug=""
+          application/code_sign_identity_release=""
+          application/provisioning_profile_specifier_debug=""
+          application/provisioning_profile_specifier_release=""
+          application/bundle_identifier="$BUNDLE_ID"
+          application/signature=""
+          application/short_version="1.0"
+          application/version="1.0"
+          application/additional_plist_content=""
+          application/icon_interpolation=4
+          application/export_project_only=true
+          application/min_ios_version="14.0"
+          icons/icon_1024x1024="res://icon.png"
+          EOF
+          
+          # ⭐ 致命修复：强行删除每一行开头的空格，防止 Godot 解析器崩溃
+          sed -i '' 's/^[[:space:]]*//' "$CFG"
+          echo "=== 重写后的配置文件（关键行） ==="
+          grep -E "include_filter|app_store_team_id|export_project_only|icon_1024" "$CFG"
+          
+          # ⭐ iOS 导出硬性要求：启用 ETC2/ASTC 纹理压缩
+          #   （缺少该配置时 Godot 导出校验会静默失败：configuration errors 且无错误详情）
+          python3 - <<'PYEOF'
+          import os
+          pg = 'project.godot'
+          c = open(pg).read()
+          key = 'textures/vram_compression/import_etc2_astc'
+          if key + '=' not in c:
+              if '[rendering]' in c:
+                  c = c.replace('[rendering]', '[rendering]\n\n' + key + '=true', 1)
+              else:
+                  c += '\n[rendering]\n\n' + key + '=true\n'
+              open(pg, 'w').write(c)
+              print('ENABLED_ETC2_ASTC')
+          else:
+              print('SKIP_ETC2_ALREADY_SET')
+          PYEOF
+          grep -n "import_etc2_astc" project.godot
+
+      - name: Ensure Absolute Valid Icon
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          if [ ! -f "icon.png" ]; then
+             echo "⚠️ 项目内没有 icon.png，从系统自动生成一张标准图..."
+             cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
+             sips -s format png icon.icns --out icon.png
+             sips -z 1024 1024 icon.png --out icon.png
+             rm icon.icns
+          fi
+          echo "✅ 图标处理完毕"
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+
+      - name: Install Godot iOS export template (GitHub源)
+        run: |
+          TPZ_URL="https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz"
+          VDIR="${{ env.GODOT_VERSION }}.stable"
+          # 1) 标准 macOS 模板位置
+          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/$VDIR"
+          mkdir -p "$TEMPLATE_DIR"
+          cd "$TEMPLATE_DIR"
+          curl -L -O "$TPZ_URL"
+          unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          mv templates/* .
+          rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          [ -f "iOS.zip" ] && mv iOS.zip ios.zip || true
+          echo "✅ 模板安装完成 (标准位置: $TEMPLATE_DIR)"
+          ls -la "$TEMPLATE_DIR" | head -10
+          # 2) 若设置了 XDG_DATA_HOME（macOS runner 通常无，保险起见）
+          if [ -n "${XDG_DATA_HOME:-}" ]; then
+            XDG_DIR="$XDG_DATA_HOME/godot/export_templates/$VDIR"
+            mkdir -p "$XDG_DIR"
+            cp ios.zip "$XDG_DIR/" 2>/dev/null || true
+            echo "✅ 已同步到 XDG 位置: $XDG_DIR"
+            ls -la "$XDG_DIR"
+          fi
+          echo "=== find ios.zip ==="
+          find / -name "ios.zip" -path "*4.7.2.stable*" 2>/dev/null || true
+
+      - name: Godot export Xcode project
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          mkdir -p build
+          echo "=== 诊断: 模板查找环境 ==="
+          echo "HOME=$HOME"
+          echo "XDG_DATA_HOME=${XDG_DATA_HOME:-<unset>}"
+          echo "--- 候选目录 ---"
+          ls -la "$HOME/Library/Application Support/Godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || echo "标准位置不存在"
+          [ -n "${XDG_DATA_HOME:-}" ] && ls -la "$XDG_DATA_HOME/godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || true
+          echo "--- 项目图标 ---"
+          ls -la icon.png 2>/dev/null || echo "icon.png 缺失"
+          godot --headless --path . --import
+          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
+          if [ ! -d "build/ios_project.xcodeproj" ]; then
+            echo "❌ Godot导出失败，没有生成 ios_project.xcodeproj !"
+            exit 1
+          fi
+
+      - name: Build Xcode project (Unsigned IPA)
+        run: |
+          cd ${{ env.PROJECT_DIR }}/build
+          SCHEME=$(xcodebuild -list -project ios_project.xcodeproj | grep -A1 "Schemes:" | tail -n1 | xargs)
+          if [ -z "$SCHEME" ]; then SCHEME="ios_project"; fi
+          echo "使用 Scheme: $SCHEME"
+          
+          xcodebuild archive \
+            -project ios_project.xcodeproj \
+            -scheme "$SCHEME" \
+            -archivePath ios_project.xcarchive \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO
+
+          mkdir -p Payload
+          find ios_project.xcarchive/Products -name "*.app" -exec cp -r {} Payload/ \;
+          zip -qr chain_unsigned.ipa Payload
+          rm -rf ios_project.xcarchive
+
+      - name: Upload IPA to Release
+        run: |
+          gh release upload ${{ env.LATEST_TAG }} ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload as Actions Artifact (Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-unsigned-ipa
+          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
   build-android:
-    uses: ./.github/workflows/build-android.yml
-    secrets: inherit
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    env:
+      GODOT_VERSION: "4.7.2"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get Latest Release Tag
+        id: get_tag
+        run: |
+          LATEST_TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
+          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+          echo "✅ 自动找到最新发行版: $LATEST_TAG"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download chain.zip from Latest Release
+        run: |
+          gh release download ${{ env.LATEST_TAG }} -p "chain.zip"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Unzip and Locate Project
+        run: |
+          unzip -q chain.zip -d game/
+          PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
+          if [ -z "$PROJECT_PATH" ]; then
+            echo "❌ 在chain.zip压缩包内找不到 project.godot！"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
+          echo "=== 找到项目根目录: $PROJECT_PATH ==="
+          rm -rf "$PROJECT_PATH/.godot"
+
+      # ⭐ 重写 Android 导出预设 + 启用 ETC2/ASTC（Godot 硬性要求，缺失会静默校验失败）
+      - name: Force Write Android Config
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          CFG="export_presets.cfg"
+
+          # 提取包名，提取不到就用默认
+          BUNDLE_ID=$(grep -E "application/package/unique_name=" "$CFG" | cut -d'"' -f2 | head -n 1)
+          if [ -z "$BUNDLE_ID" ]; then BUNDLE_ID="com.dewrb.game"; fi
+          # 应用显示名
+          APP_NAME=$(grep -E "application/package/name=" "$CFG" | cut -d'"' -f2 | head -n 1)
+          if [ -z "$APP_NAME" ]; then APP_NAME="chain"; fi
+
+          cat > "$CFG" << EOF
+          [runnable_presets]
+          Android="Android"
+
+          [preset.0]
+          name="Android"
+          platform="Android"
+          dedicated_server=false
+          custom_features=""
+          export_filter="all_resources"
+          include_filter=""
+          exclude_filter=""
+          export_path=""
+          patches=PackedStringArray()
+          patch_delta_encoding=false
+          patch_delta_compression_level_zstd=19
+          patch_delta_min_reduction=0.1
+          patch_delta_include_filters="*"
+          patch_delta_exclude_filters=""
+          encryption_include_filters=""
+          encryption_exclude_filters=""
+          seed=0
+          encrypt_pck=false
+          encrypt_directory=false
+          script_export_mode=2
+
+          [preset.0.options]
+          custom_template/debug=""
+          custom_template/release=""
+          architectures/armeabi-v7a=false
+          architectures/arm64-v8a=true
+          architectures/x86=false
+          architectures/x86_64=false
+          graphics/2d/rendering_method="gl_compatibility"
+          graphics/2d/rendering_method_mobile="gl_compatibility"
+          graphics/3d/rendering_method="forward_plus"
+          graphics/3d/rendering_method_mobile="gl_compatibility"
+          application/package/unique_name="$BUNDLE_ID"
+          application/package/name="$APP_NAME"
+          application/package/signed=true
+          application/package/app_category=2
+          application/package/retain_data_on_uninstall=false
+          application/package/exclude_from_recents=false
+          application/package/show_in_launcher=true
+          application/package/launch_intent=""
+          application/package/icon=""
+          application/package/icon_adaptive_foreground=""
+          application/package/icon_adaptive_background=""
+          application/package/icon_adaptive_background_color=""
+          version/code=1
+          version/name="1.0"
+          keystore/debug="$HOME/.android/debug.keystore"
+          keystore/debug_user="androiddebugkey"
+          keystore/debug_password="android"
+          keystore/release="$HOME/.android/debug.keystore"
+          keystore/release_user="androiddebugkey"
+          keystore/release_password="android"
+          android_build_mode=1
+          gradle_build/use_gradle_build=true
+          gradle_build/gradle_build_directory=""
+          gradle_build/compress_native_libraries=false
+          gradle_build/export_format=0
+          gradle_build/min_sdk="24"
+          gradle_build/target_sdk="36"
+          gradle_build/build_tools="36.0.0"
+          EOF
+
+          # ⭐ 致命修复：强行删除每一行开头的空格，防止 Godot 解析器崩溃
+          sed -i 's/^[[:space:]]*//' "$CFG"
+          echo "=== 重写后的配置文件（关键行） ==="
+          grep -E "unique_name|signed|keystore/release|android_build_mode|export_format|target_sdk" "$CFG"
+
+          # ⭐ 启用 ETC2/ASTC 纹理压缩（Android/iOS 均要求，缺失时 Godot 静默校验失败）
+          python3 - <<'PYEOF'
+          pg = 'project.godot'
+          c = open(pg).read()
+          key = 'textures/vram_compression/import_etc2_astc'
+          if key + '=' not in c:
+              if '[rendering]' in c:
+                  c = c.replace('[rendering]', '[rendering]\n\n' + key + '=true', 1)
+              else:
+                  c += '\n[rendering]\n\n' + key + '=true\n'
+              open(pg, 'w').write(c)
+              print('ENABLED_ETC2_ASTC')
+          else:
+              print('SKIP_ETC2_ALREADY_SET')
+          PYEOF
+          grep -n "import_etc2_astc" project.godot
+
+      - name: Ensure Icon
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          if [ ! -f "icon.png" ]; then
+            echo "⚠️ 项目内没有 icon.png，生成一张占位图..."
+            python3 - <<'PYEOF'
+          from PIL import Image
+          img = Image.new('RGBA', (1024, 1024), (30, 144, 255, 255))
+          img.save('icon.png')
+          print('icon.png generated')
+          PYEOF
+          fi
+          ls -la icon.png
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Android SDK (platform 36 + build-tools)
+        run: |
+          SDK_ROOT=/usr/local/lib/android/sdk
+          echo "ANDROID_HOME=$SDK_ROOT" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> $GITHUB_ENV
+          SDK_MGR=$(find "$SDK_ROOT" -name sdkmanager -type f 2>/dev/null | head -1)
+          echo "sdkmanager: $SDK_MGR"
+          yes | "$SDK_MGR" --licenses >/dev/null 2>&1 || true
+          echo "--- 已安装 platforms ---"
+          ls "$SDK_ROOT/platforms" 2>/dev/null || echo "(none)"
+          echo "--- 安装 android-36 / build-tools ---"
+          yes | "$SDK_MGR" "platforms;android-36" "build-tools;36.0.0" "platform-tools" >/dev/null 2>&1 || true
+          ls "$SDK_ROOT/platforms"
+          ls "$SDK_ROOT/build-tools" 2>/dev/null
+
+      - name: Generate Debug Keystore
+        run: |
+          mkdir -p "$HOME/.android"
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            keytool -genkeypair -v -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -alias androiddebugkey -keypass android \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" 2>&1 | tail -2
+          fi
+          ls -la "$HOME/.android/debug.keystore"
+
+      - name: Setup Godot
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: ${{ env.GODOT_VERSION }}
+          use-dotnet: false
+
+      - name: Install Godot Export Templates (all platforms)
+        run: |
+          TPL_DIR="$HOME/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable"
+          mkdir -p "$TPL_DIR"
+          cd "$TPL_DIR"
+          curl -L -O "https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz"
+          unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          mv templates/* .
+          rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
+          echo "=== 模板文件 ==="
+          ls -la "$TPL_DIR" | grep -E "android|ios|version" || ls -la "$TPL_DIR"
+          cat "$TPL_DIR/version.txt"
+
+      - name: Install Android Build Template into Project
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          # ⭐ 完全模拟 Godot 的 "Install Android Build Template" 逻辑：
+          #   1) res://android/.build_version：版本标识 = GODOT_VERSION_FULL_CONFIG（如 4.7.2.stable）。
+          #      ⚠ 注意：不能写 godot --version 的完整输出（带 official.<hash>），
+          #      Godot 导出校验比对的是配置版本号，写错会报 "Android build version mismatch"
+          mkdir -p android
+          printf "%s" "${{ env.GODOT_VERSION }}.stable" > android/.build_version
+          echo ".build_version = $(cat android/.build_version)"
+          #   2) 解压 android_source.zip 到 res://android/build/
+          mkdir -p android/build
+          unzip -q -o "$HOME/.local/share/godot/export_templates/${{ env.GODOT_VERSION }}.stable/android_source.zip" -d android/build
+          #   3) android/build/.gdignore：避免 Godot 扫描 build 目录资源
+          touch android/build/.gdignore
+          echo "=== build template 结构 ==="
+          ls android/build/ | head -15
+          ls android/build/gradle/wrapper/ 2>/dev/null || echo "(无 gradle wrapper 目录)"
+          grep -E "compileSdk|targetSdk" android/build/config.gradle | head -3
+
+      - name: Godot Export Android APK (Gradle Build)
+        run: |
+          cd ${{ env.PROJECT_DIR }}
+          mkdir -p build
+          godot --headless --path . --import
+          godot --headless --path . --export-release "Android" build/chain_unsigned.apk
+          if [ ! -f "build/chain_unsigned.apk" ]; then
+            echo "❌ Godot导出失败，没有生成 APK !"
+            exit 1
+          fi
+          ls -la build/chain_unsigned.apk
+
+      - name: Upload APK to Release
+        run: |
+          gh release upload ${{ env.LATEST_TAG }} ${{ env.PROJECT_DIR }}/build/chain_unsigned.apk --clobber
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload as Actions Artifact (Backup)
+        uses: actions/upload-artifact@v4
+        with:
+          name: chain-unsigned-apk
+          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.apk
