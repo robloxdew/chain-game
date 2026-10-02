@@ -1,0 +1,15 @@
+name: Build Both (iOS IPA + Android APK)
+
+on:
+  workflow_dispatch: # 手动触发，一次并行构建双端
+
+jobs:
+  # iOS 构建（macOS runner，Godot 导出 Xcode 工程 → xcodebuild 打包未签名 IPA）
+  build-ios:
+    uses: ./.github/workflows/build-ios.yml
+    secrets: inherit
+
+  # Android 构建（Ubuntu runner，JDK17 + Android SDK36 + Gradle 打包签名 APK）
+  build-android:
+    uses: ./.github/workflows/build-android.yml
+    secrets: inherit

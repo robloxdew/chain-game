@@ -1,7 +1,8 @@
 name: Build iOS IPA (From Release)
 
 on:
-  workflow_dispatch: # ⭐ 手动触发
+  workflow_dispatch: # 手动触发
+  workflow_call: # 供双端构建复用
 
 jobs:
   build-ios:
