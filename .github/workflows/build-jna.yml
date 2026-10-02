@@ -17,26 +17,29 @@ jobs:
       - name: Install Dependencies
         run: |
           brew install ldid autoconf automake libtool pkg-config
-          # 使用 Python 3.11 以确保 distutils 兼容性
+          # 使用 Python 3.11 以确保 distutils 兼容性（如果后续步骤需要）
           brew install python@3.11
           echo "/opt/homebrew/opt/python@3.11/bin" >> $GITHUB_PATH
 
       - name: Build JNA for iOS (arm64)
         run: |
-          # 1. 修正版本标签：JNA 官方标签必须带 'v' 前缀
-          JNA_VERSION="v5.13.0"
+          # 1. 使用正确的标签名（不带 'v' 前缀）
+          JNA_VERSION="5.13.0"
           git clone --depth 1 --branch $JNA_VERSION https://github.com/java-native-access/jna.git jna_src
           cd jna_src
 
-          # 2. 生成 iOS 构建脚本（强制使用 Python 3.11）
-          python3.11 native/generate-darwin-source-and-headers.py
-
-          # 3. 编译 arm64 架构，目标 iOS 14.0
+          # 2. 直接进入 native 目录进行编译
           cd native
-          ./configure --host=aarch64-apple-darwin --with-ios-sdk=iphoneos --with-ios-version=14.0
+
+          # 3. 配置交叉编译环境，指定 iOS SDK 和最低版本
+          ./configure --host=aarch64-apple-darwin \
+            --with-ios-sdk=iphoneos \
+            --with-ios-version=14.0
+
+          # 4. 编译
           make -j$(sysctl -n hw.ncpu)
 
-          # 4. 提取编译好的库并移动到根目录
+          # 5. 提取编译好的库并移动到根目录
           find . -name "libjnidispatch.dylib" -exec cp {} $GITHUB_WORKSPACE/libjnidispatch.dylib \;
           echo "✅ JNA build complete."
 
