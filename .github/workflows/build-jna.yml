@@ -1,0 +1,81 @@
+name: Build iOS JNA Dynamic Library
+
+on:
+  workflow_dispatch: # 允许你手动触发构建
+  push:
+    branches: [ main ]
+
+jobs:
+  build-jna:
+    name: Build and Sign libjnidispatch.dylib
+    runs-on: macos-14 # 使用 macOS 14 (Apple Silicon) Runner
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Dependencies
+        run: |
+          # 安装 ldid 用于 ad-hoc 签名，安装构建工具
+          brew install ldid autoconf automake libtool pkg-config
+
+      - name: Build JNA for iOS (arm64)
+        run: |
+          # 1. 克隆 JNA 源码 (你可以按需替换版本号，如 v5.13.0)
+          JNA_VERSION="5.13.0"
+          git clone --depth 1 --branch $JNA_VERSION https://github.com/java-native-access/jna.git jna_src
+          cd jna_src
+
+          # 2. 生成 iOS 构建所需的 configure 脚本
+          python3 native/generate-darwin-source-and-headers.py
+
+          # 3. 针对 arm64 架构进行配置和编译
+          cd native
+          # 指定 iOS SDK 和最低版本 (建议与你设备的 iOS 版本匹配，如 14.0)
+          ./configure --host=aarch64-apple-darwin --with-ios-sdk=iphoneos --with-ios-version=14.0
+          make -j$(sysctl -n hw.ncpu)
+
+          # 4. 找到编译好的库文件并复制到工作流根目录
+          find . -name "libjnidispatch.dylib" -exec cp {} $GITHUB_WORKSPACE/libjnidispatch.dylib \;
+          echo "✅ JNA build complete."
+
+      - name: Sign JNA with Entitlements
+        run: |
+          # 1. 创建 entitlements.plist 文件
+          # 这是绕过 iOS 签名检查、确保 JNA 能被加载的关键
+          cat > jna_entitlements.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>com.apple.private.security.no-sandbox</key>
+              <true/>
+              <key>com.apple.developer.kernel.extended-virtual-addressing</key>
+              <true/>
+              <key>com.apple.developer.kernel.increased-memory-limit</key>
+              <true/>
+              <key>dynamic-codesigning</key>
+              <true/>
+              <key>platform-application</key>
+              <true/>
+          </dict>
+          </plist>
+          EOF
+
+          # 2. 使用 ldid 对 JNA 库进行 ad-hoc 签名
+          ldid -S jna_entitlements.plist libjnidispatch.dylib
+          echo "✅ JNA signed successfully with entitlements."
+
+      - name: Verify Signature
+        run: |
+          # 使用 ldid -e 验证库文件的 entitlements 是否已正确注入
+          echo "--- Verifying entitlements ---"
+          ldid -e libjnidispatch.dylib
+          echo "--- Verification complete ---"
+
+      - name: Upload Dynamic Library
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-libjnidispatch-ios
+          path: libjnidispatch.dylib
+          if-no-files-found: error
