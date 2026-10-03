@@ -35,12 +35,11 @@ jobs:
           curl -sL -o jna.tar.gz "https://github.com/java-native-access/jna/archive/refs/tags/${{ env.JNA_TAG }}.tar.gz"
           tar xzf jna.tar.gz
           ls -d jna-*
-          # libffi 3.4.4 的 aarch64 sysv.S 使用 CFI 算术表达式，新 clang 汇编器不支持，
-          # 展开为 Apple arm64 平台的确定常量（CALL_CONTEXT_SIZE=8*16+8*8=192）
+          # libffi 3.4.4 的 aarch64 sysv.S 用 CFI 算术表达式（宏 ffi_closure_SYSV_FS），
+          # 新 clang 汇编器不支持 .cfi 指令中的表达式。把宏值固定为 Apple arm64 常量
+          # （CALL_CONTEXT_SIZE=8*16+8*8=192 → 8*2+192+64=272），调用处保持不变
           sed -i '' 's/#define ffi_closure_SYSV_FS (8\*2 + CALL_CONTEXT_SIZE + 64)/#define ffi_closure_SYSV_FS 272/' jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
-          sed -i '' 's/cfi_adjust_cfa_offset (ffi_closure_SYSV_FS)/cfi_adjust_cfa_offset 272/g' jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
-          sed -i '' 's/cfi_adjust_cfa_offset (-ffi_closure_SYSV_FS)/cfi_adjust_cfa_offset -272/g' jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
-          grep -n "ffi_closure_SYSV_FS\|cfi_adjust_cfa_offset" jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
+          grep -n "define ffi_closure_SYSV_FS" jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
 
       - name: Generate JNI headers (ant javah)
         run: |
