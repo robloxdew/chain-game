@@ -53,18 +53,15 @@ jobs:
           sed -i '' 's/#define ffi_closure_SYSV_FS (8\*2 + CALL_CONTEXT_SIZE + 64)/#define ffi_closure_SYSV_FS 272/' jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
           grep -n "define ffi_closure_SYSV_FS" jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
 
-      - name: Generate JNI headers (manual javah, ant javah task silent-fails)
+      - name: Generate JNI headers (ant javah, headers land in build/headers)
         run: |
           cd jna-${{ env.JNA_TAG }}
-          # 编译 core 类（ant javah 的 compile-core 前置依赖）
-          ant compile-core 2>&1 | tail -4
+          # compile 的 javac nativeheaderdir=build/headers 自动生成 JNI 头文件
+          ant javah 2>&1 | tail -6
+          echo "--- generated JNI headers ---"
+          ls -la build/headers/
           ND=$(ls -d build/native-* | head -1)
-          echo "native dir: $ND"
-          # JDK8 javah 生成 JNI 头文件（对应 build.xml javah target 的 3 个类）
-          javah -classpath build/classes -d $ND \
-            com.sun.jna.Function com.sun.jna.Native com.sun.jna.win32.DLLCallback
-          echo "--- generated headers ---"
-          ls -la $ND/
+          echo "native build dir: $ND"
 
       - name: Cross-compile libffi for iOS arm64
         run: |
@@ -98,7 +95,7 @@ jobs:
           CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
           COMMON="-x objective-c -fPIC -D_REENTRANT -DTARGET_RT_MAC_CFM=0 -DFFI_MMAP_EXEC_WRIT -DNO_JAWT \
                   -DJNA_JNI_VERSION='\"5.1.0\"' -DCHECKSUM='\"74e8f8e397c43487738c5c1f1363498b\"' \
-                  -I $ND -I native -I $ND/libffi/include \
+                  -I build/headers -I native -I $ND/libffi/include \
                   -I $JH/include -I $JH/include/darwin"
           eval $CC $COMMON -c native/dispatch.c -o build/ios/dispatch.o
           eval $CC $COMMON -c native/callback.c -o build/ios/callback.o
