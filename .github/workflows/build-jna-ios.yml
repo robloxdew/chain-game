@@ -39,20 +39,25 @@ jobs:
       - name: Generate JNI headers (ant javah)
         run: |
           cd jna-${{ env.JNA_TAG }}
-          ant javah 2>&1 | tail -5
-          echo "--- generated headers ---"
-          ls build/native/
+          ant javah 2>&1 | tail -15
+          echo "--- generated native build dir ---"
+          ls -d build/native-*/
+          ND=$(ls -d build/native-* | head -1)
+          echo "ND=$ND"
+          ls $ND/
 
       - name: Cross-compile libffi for iOS arm64
         run: |
           cd jna-${{ env.JNA_TAG }}
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           echo "iOS SDK: $SDK"
-          mkdir -p build/native/libffi
+          ND=$(ls -d build/native-* | head -1)
+          echo "native dir: $ND"
+          mkdir -p $ND/libffi
           cd native/libffi
           # 生成 configure（源码包未附带）
           /bin/sh autogen.sh
-          cd ../../build/native/libffi
+          cd ../../$ND/libffi
           export CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
           export CFLAGS="-O2 -ffunction-sections"
           export CPPFLAGS="-DFFI_MMAP_EXEC_WRIT"
@@ -66,18 +71,19 @@ jobs:
           cd jna-${{ env.JNA_TAG }}
           SDK=$(xcrun --sdk iphoneos --show-sdk-path)
           JH=$(dirname $(dirname $(readlink -f $(which java))))
-          echo "JAVA_HOME: $JH"
+          ND=$(ls -d build/native-* | head -1)
+          echo "JAVA_HOME: $JH  native dir: $ND"
           mkdir -p build/ios
           # 与 JNA darwin 构建一致：.c 按 Objective-C 编译（需 Foundation），链接 Foundation 框架
-          $CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
+          CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
           COMMON="-x objective-c -fPIC -D_REENTRANT -DTARGET_RT_MAC_CFM=0 -DFFI_MMAP_EXEC_WRIT -DNO_JAWT \
                   -DJNA_JNI_VERSION='\"5.1.0\"' -DCHECKSUM='\"74e8f8e397c43487738c5c1f1363498b\"' \
-                  -I build/native -I native -I build/native/libffi/include \
+                  -I $ND -I native -I $ND/libffi/include \
                   -I $JH/include -I $JH/include/darwin"
           eval $CC $COMMON -c native/dispatch.c -o build/ios/dispatch.o
           eval $CC $COMMON -c native/callback.c -o build/ios/callback.o
           eval $CC -dynamiclib -o build/ios/libjnidispatch.dylib \
-            build/ios/dispatch.o build/ios/callback.o build/native/libffi/.libs/libffi.a \
+            build/ios/dispatch.o build/ios/callback.o $ND/libffi/.libs/libffi.a \
             -framework Foundation -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK \
             -compatibility_version 5 -current_version 5.1.0
           echo "--- jnidispatch result ---"
