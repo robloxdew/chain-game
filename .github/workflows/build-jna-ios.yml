@@ -1,0 +1,91 @@
+name: Build JNA iOS arm64 (from GitHub source)
+
+on:
+  workflow_dispatch: # 手动触发：从 GitHub 下载 JNA 5.13.0 源码交叉编译 iOS arm64 动态库
+
+jobs:
+  build-jna-ios:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      JNA_TAG: "5.13.0"
+      IOS_MIN_VER: "14.0"
+      TARGET_ARCH: "arm64"
+
+    steps:
+      - name: Checkout this repo (workflow carrier)
+        uses: actions/checkout@v4
+
+      - name: Setup JDK 8 (javah available)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '8'
+          distribution: 'zulu'
+
+      - name: Install build tools (ant + autotools)
+        run: |
+          brew install ant autoconf automake libtool texinfo
+          java -version
+          ant -version
+
+      - name: Download and extract JNA source from GitHub
+        run: |
+          curl -sL -o jna.tar.gz "https://github.com/java-native-access/jna/archive/refs/tags/${{ env.JNA_TAG }}.tar.gz"
+          tar xzf jna.tar.gz
+          ls -d jna-*
+
+      - name: Generate JNI headers (ant javah)
+        run: |
+          cd jna-${{ env.JNA_TAG }}
+          ant javah 2>&1 | tail -5
+          echo "--- generated headers ---"
+          ls build/native/
+
+      - name: Cross-compile libffi for iOS arm64
+        run: |
+          cd jna-${{ env.JNA_TAG }}
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          echo "iOS SDK: $SDK"
+          mkdir -p build/native/libffi
+          cd native/libffi
+          # 生成 configure（源码包未附带）
+          /bin/sh autogen.sh
+          cd ../../build/native/libffi
+          export CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
+          export CFLAGS="-O2 -ffunction-sections"
+          export CPPFLAGS="-DFFI_MMAP_EXEC_WRIT"
+          ../../../native/libffi/configure --enable-static --disable-shared --with-pic=yes --host=aarch64-apple-darwin
+          make -j4
+          echo "--- libffi result ---"
+          file .libs/libffi.a
+
+      - name: Cross-compile libjnidispatch.dylib for iOS arm64
+        run: |
+          cd jna-${{ env.JNA_TAG }}
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+          JH=$(dirname $(dirname $(readlink -f $(which java))))
+          echo "JAVA_HOME: $JH"
+          mkdir -p build/ios
+          # 与 JNA darwin 构建一致：.c 按 Objective-C 编译（需 Foundation），链接 Foundation 框架
+          $CC="xcrun --sdk iphoneos clang -arch ${{ env.TARGET_ARCH }} -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK"
+          COMMON="-x objective-c -fPIC -D_REENTRANT -DTARGET_RT_MAC_CFM=0 -DFFI_MMAP_EXEC_WRIT -DNO_JAWT \
+                  -DJNA_JNI_VERSION='\"5.1.0\"' -DCHECKSUM='\"74e8f8e397c43487738c5c1f1363498b\"' \
+                  -I build/native -I native -I build/native/libffi/include \
+                  -I $JH/include -I $JH/include/darwin"
+          eval $CC $COMMON -c native/dispatch.c -o build/ios/dispatch.o
+          eval $CC $COMMON -c native/callback.c -o build/ios/callback.o
+          eval $CC -dynamiclib -o build/ios/libjnidispatch.dylib \
+            build/ios/dispatch.o build/ios/callback.o build/native/libffi/.libs/libffi.a \
+            -framework Foundation -mios-version-min=${{ env.IOS_MIN_VER }} -isysroot $SDK \
+            -compatibility_version 5 -current_version 5.1.0
+          echo "--- jnidispatch result ---"
+          file build/ios/libjnidispatch.dylib
+          lipo -info build/ios/libjnidispatch.dylib
+
+      - name: Upload JNA iOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jna-ios-arm64
+          path: jna-${{ env.JNA_TAG }}/build/ios/libjnidispatch.dylib
