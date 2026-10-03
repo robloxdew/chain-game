@@ -53,15 +53,18 @@ jobs:
           sed -i '' 's/#define ffi_closure_SYSV_FS (8\*2 + CALL_CONTEXT_SIZE + 64)/#define ffi_closure_SYSV_FS 272/' jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
           grep -n "define ffi_closure_SYSV_FS" jna-${{ env.JNA_TAG }}/native/libffi/src/aarch64/sysv.S
 
-      - name: Generate JNI headers (ant javah)
+      - name: Generate JNI headers (manual javah, ant javah task silent-fails)
         run: |
           cd jna-${{ env.JNA_TAG }}
-          ant javah 2>&1 | tail -15
-          echo "--- generated native build dir ---"
-          ls -d build/native-*/
+          # 编译 core 类（ant javah 的 compile-core 前置依赖）
+          ant compile-core 2>&1 | tail -4
           ND=$(ls -d build/native-* | head -1)
-          echo "ND=$ND"
-          ls $ND/
+          echo "native dir: $ND"
+          # JDK8 javah 生成 JNI 头文件（对应 build.xml javah target 的 3 个类）
+          javah -classpath build/classes -d $ND \
+            com.sun.jna.Function com.sun.jna.Native com.sun.jna.win32.DLLCallback
+          echo "--- generated headers ---"
+          ls -la $ND/
 
       - name: Cross-compile libffi for iOS arm64
         run: |
