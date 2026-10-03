@@ -5,7 +5,7 @@ on:
 
 jobs:
   build-jna-ios:
-    runs-on: macos-latest
+    runs-on: macos-14
     timeout-minutes: 60
     permissions:
       contents: write
@@ -23,6 +23,18 @@ jobs:
         with:
           java-version: '8'
           distribution: 'zulu'
+
+      - name: Prefer older Xcode (libffi 3.4.4 CFI compat)
+        run: |
+          ls /Applications | grep -i xcode || true
+          # libffi 3.4.4 的 sysv.S CFI 写法与 clang 18+ 汇编器不兼容，选最老的可用 Xcode
+          OLDEST=$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort | head -1)
+          if [ -n "$OLDEST" ]; then
+            echo "using $OLDEST"
+            sudo xcode-select -s "$OLDEST/Contents/Developer"
+          fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
 
       - name: Install build tools (ant + autotools)
         run: |
