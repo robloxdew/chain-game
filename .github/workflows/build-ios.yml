@@ -1,244 +1,216 @@
-name: Build iOS IPA (From Release)
+name: Build iOS IPA (From Release Source)
+
+# 用途：从最新 Release 拉取 Godot 导出的 iOS 源码压缩包（默认 chain_ios.zip），
+# 解压得到 .xcodeproj，archive 成未签名 IPA，回传同一个 Release。
+# 放置位置：.github/workflows/build-ios-ipa.yml
 
 on:
-  workflow_dispatch: # 手动触发
-  workflow_call: # 供双端构建复用
+  workflow_dispatch:
+    inputs:
+      asset_name:
+        description: "Release 中的 iOS 源码压缩包文件名"
+        required: false
+        default: "chain_ios.zip"
 
 jobs:
   build-ios:
     runs-on: macos-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     permissions:
-      contents: write # 允许下载和上传 Release 附件
+      contents: write # 需要上传 Release 附件
+
     env:
-      GODOT_VERSION: "4.7.2"
+      ASSET_NAME: ${{ github.event.inputs.asset_name || 'chain_ios.zip' }}
+      IPA_NAME: chain_unsigned.ipa
 
     steps:
-      - name: Checkout repo
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Free disk space
+      - name: Show toolchain
         run: |
-          df -h
-          sudo rm -rf /Applications/Android\ Studio.app
-          sudo rm -rf ~/Library/Android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /usr/local/share/boost
-          df -h
+          xcodebuild -version
+          python3 --version
+          sw_vers
 
-      - name: Install GitHub CLI (gh)
-        run: |
-          brew install gh --quiet
-          gh --version
-
-      - name: Get Latest Release Tag
-        run: |
-          # ⭐ 修正正确的参数拼写 --exclude-pre-releases
-          LATEST_TAG=$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases --json tagName --jq '.[0].tagName')
-          if [ -z "$LATEST_TAG" ]; then
-            echo "❌ 没有找到任何发行版！"
-            exit 1
-          fi
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-          echo "✅ 自动找到最新发行版: $LATEST_TAG"
+      - name: Resolve latest release and download source
+        id: rel
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Download chain.zip from Latest Release
         run: |
-          gh release download ${{ env.LATEST_TAG }} -p "chain.zip"
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          set -euo pipefail
 
-      - name: Unzip and Locate Project
-        run: |
-          unzip -q chain.zip -d game/
-          PROJECT_PATH=$(find game -name "project.godot" -exec dirname {} \; | head -n 1)
-          if [ -z "$PROJECT_PATH" ]; then
-            echo "❌ 在chain.zip压缩包内找不到 project.godot！"
+          # inputs 为空时回退默认名（workflow_dispatch 的 default 已兜底，这里再保一层）
+          ASSET="${ASSET_NAME:-chain_ios.zip}"
+
+          TAG=$(gh release list --limit 1 --exclude-drafts --exclude-pre-releases \
+                --json tagName --jq '.[0].tagName')
+          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
+            echo "::error::没有找到任何发行版"
             exit 1
           fi
-          echo "PROJECT_DIR=$PROJECT_PATH" >> $GITHUB_ENV
-          echo "=== 找到项目根目录: $PROJECT_PATH ==="
-          
-          # ⭐ 确保剔除可能残留的 .godot 缓存（防止污染）
-          rm -rf "$PROJECT_PATH/.godot"
+          echo "最新发行版: $TAG"
 
-      # ⭐ 核心修复：彻底重写标准 iOS 配置，并强制清除行首缩进空格
-      - name: Force Write Absolute Config
+          mkdir -p download
+          gh release download "$TAG" -p "$ASSET" --dir download
+          ls -lh download
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "asset=$ASSET" >> "$GITHUB_OUTPUT"
+
+      - name: Unpack and locate Xcode project
+        id: proj
         run: |
-          cd ${{ env.PROJECT_DIR }}
-          CFG="export_presets.cfg"
-          
-          # 提取包名，提取不到就用默认
-          BUNDLE_ID=$(grep "application/bundle_identifier=" "$CFG" | cut -d'"' -f2 | head -n 1)
-          if [ -z "$BUNDLE_ID" ]; then BUNDLE_ID="com.dewrb.game"; fi
-          
-          cat > "$CFG" << EOF
-          [runnable_presets]
-          iOS="iOS"
+          set -euo pipefail
 
-          [preset.0]
-          name="iOS"
-          platform="iOS"
-          dedicated_server=false
-          custom_features=""
-          export_filter="all_resources"
-          include_filter=""
-          exclude_filter=""
-          export_path=""
-          patches=PackedStringArray()
-          patch_delta_encoding=false
-          patch_delta_compression_level_zstd=19
-          patch_delta_min_reduction=0.1
-          patch_delta_include_filters="*"
-          patch_delta_exclude_filters=""
-          encryption_include_filters=""
-          encryption_exclude_filters=""
-          seed=0
-          encrypt_pck=false
-          encrypt_directory=false
-          script_export_mode=2
+          ASSET="${{ steps.rel.outputs.asset }}"
+          rm -rf src
+          mkdir -p src
+          unzip -q "download/$ASSET" -d src
 
-          [preset.0.options]
-          custom_template/debug=""
-          custom_template/release=""
-          architectures/arm64=true
-          application/app_store_team_id="DEWRB12345"
-          application/export_method_debug=1
-          application/export_method_release=1
-          application/code_sign_identity_debug=""
-          application/code_sign_identity_release=""
-          application/provisioning_profile_specifier_debug=""
-          application/provisioning_profile_specifier_release=""
-          application/bundle_identifier="$BUNDLE_ID"
-          application/signature=""
-          application/short_version="1.0"
-          application/version="1.0"
-          application/additional_plist_content=""
-          application/icon_interpolation=4
-          application/export_project_only=true
-          application/min_ios_version="14.0"
-          icons/icon_1024x1024="res://icon.png"
-          EOF
-          
-          # ⭐ 致命修复：强行删除每一行开头的空格，防止 Godot 解析器崩溃
-          sed -i '' 's/^[[:space:]]*//' "$CFG"
-          echo "=== 重写后的配置文件（关键行） ==="
-          grep -E "include_filter|app_store_team_id|export_project_only|icon_1024" "$CFG"
-          
-          # ⭐ iOS 导出硬性要求：启用 ETC2/ASTC 纹理压缩
-          #   （缺少该配置时 Godot 导出校验会静默失败：configuration errors 且无错误详情）
-          python3 - <<'PYEOF'
-          import os
-          pg = 'project.godot'
-          c = open(pg).read()
-          key = 'textures/vram_compression/import_etc2_astc'
-          if key + '=' not in c:
-              if '[rendering]' in c:
-                  c = c.replace('[rendering]', '[rendering]\n\n' + key + '=true', 1)
-              else:
-                  c += '\n[rendering]\n\n' + key + '=true\n'
-              open(pg, 'w').write(c)
-              print('ENABLED_ETC2_ASTC')
-          else:
-              print('SKIP_ETC2_ALREADY_SET')
-          PYEOF
-          grep -n "import_etc2_astc" project.godot
-
-      - name: Ensure Absolute Valid Icon
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          if [ ! -f "icon.png" ]; then
-             echo "⚠️ 项目内没有 icon.png，从系统自动生成一张标准图..."
-             cp /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/GenericApplicationIcon.icns icon.icns
-             sips -s format png icon.icns --out icon.png
-             sips -z 1024 1024 icon.png --out icon.png
-             rm icon.icns
-          fi
-          echo "✅ 图标处理完毕"
-
-      - name: Setup Godot
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: ${{ env.GODOT_VERSION }}
-          use-dotnet: false
-
-      - name: Install Godot iOS export template (GitHub源)
-        run: |
-          TPZ_URL="https://github.com/godotengine/godot/releases/download/${{ env.GODOT_VERSION }}-stable/Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz"
-          VDIR="${{ env.GODOT_VERSION }}.stable"
-          # 1) 标准 macOS 模板位置
-          TEMPLATE_DIR="$HOME/Library/Application Support/Godot/export_templates/$VDIR"
-          mkdir -p "$TEMPLATE_DIR"
-          cd "$TEMPLATE_DIR"
-          curl -L -O "$TPZ_URL"
-          unzip -q Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
-          mv templates/* .
-          rm -rf templates Godot_v${{ env.GODOT_VERSION }}-stable_export_templates.tpz
-          [ -f "iOS.zip" ] && mv iOS.zip ios.zip || true
-          echo "✅ 模板安装完成 (标准位置: $TEMPLATE_DIR)"
-          ls -la "$TEMPLATE_DIR" | head -10
-          # 2) 若设置了 XDG_DATA_HOME（macOS runner 通常无，保险起见）
-          if [ -n "${XDG_DATA_HOME:-}" ]; then
-            XDG_DIR="$XDG_DATA_HOME/godot/export_templates/$VDIR"
-            mkdir -p "$XDG_DIR"
-            cp ios.zip "$XDG_DIR/" 2>/dev/null || true
-            echo "✅ 已同步到 XDG 位置: $XDG_DIR"
-            ls -la "$XDG_DIR"
-          fi
-          echo "=== find ios.zip ==="
-          find / -name "ios.zip" -path "*4.7.2.stable*" 2>/dev/null || true
-
-      - name: Godot export Xcode project
-        run: |
-          cd ${{ env.PROJECT_DIR }}
-          mkdir -p build
-          echo "=== 诊断: 模板查找环境 ==="
-          echo "HOME=$HOME"
-          echo "XDG_DATA_HOME=${XDG_DATA_HOME:-<unset>}"
-          echo "--- 候选目录 ---"
-          ls -la "$HOME/Library/Application Support/Godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || echo "标准位置不存在"
-          [ -n "${XDG_DATA_HOME:-}" ] && ls -la "$XDG_DATA_HOME/godot/export_templates/${{ env.GODOT_VERSION }}.stable/" 2>/dev/null | head -12 || true
-          echo "--- 项目图标 ---"
-          ls -la icon.png 2>/dev/null || echo "icon.png 缺失"
-          godot --headless --path . --import
-          godot --headless --path . --export-release "iOS" build/ios_project.xcodeproj
-          if [ ! -d "build/ios_project.xcodeproj" ]; then
-            echo "❌ Godot导出失败，没有生成 ios_project.xcodeproj !"
+          PROJ=$(find src -type d -name "*.xcodeproj" | head -n 1)
+          if [ -z "$PROJ" ]; then
+            echo "::error::压缩包内没有 .xcodeproj，请确认上传的是 Godot 导出的 iOS 源码"
+            echo "=== 压缩包内容（前 60 项）==="
+            find src -maxdepth 3 | head -60
             exit 1
           fi
 
-      - name: Build Xcode project (Unsigned IPA)
+          WORKDIR=$(dirname "$PROJ")
+          PROJNAME=$(basename "$PROJ")
+          echo "工作目录: $WORKDIR"
+          echo "工程文件: $PROJNAME"
+          ls -la "$WORKDIR" | head -25
+
+          echo "workdir=$WORKDIR" >> "$GITHUB_OUTPUT"
+          echo "projname=$PROJNAME" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve scheme
+        id: scheme
         run: |
-          cd ${{ env.PROJECT_DIR }}/build
-          SCHEME=$(xcodebuild -list -project ios_project.xcodeproj | grep -A1 "Schemes:" | tail -n1 | xargs)
-          if [ -z "$SCHEME" ]; then SCHEME="ios_project"; fi
+          set -euo pipefail
+
+          PROJ="${{ steps.proj.outputs.workdir }}/${{ steps.proj.outputs.projname }}"
+
+          echo "=== xcodebuild -list ==="
+          xcodebuild -list -project "$PROJ" || true
+
+          # 优先取工程内 shared scheme；解析不到就用工程名兜底
+          SCHEME=$(xcodebuild -list -json -project "$PROJ" 2>/dev/null \
+            | python3 -c 'import sys,json; d=json.load(sys.stdin); p=d.get("project") or d.get("workspace") or {}; s=p.get("schemes") or []; print(s[0] if s else "")' \
+            2>/dev/null || true)
+
+          if [ -z "$SCHEME" ]; then
+            SCHEME="${{ steps.proj.outputs.projname }}"
+            SCHEME="${SCHEME%.xcodeproj}"
+            echo "::warning::未解析到 scheme，回退使用工程名: $SCHEME"
+          fi
+
           echo "使用 Scheme: $SCHEME"
-          
+          echo "scheme=$SCHEME" >> "$GITHUB_OUTPUT"
+
+      - name: Archive (unsigned)
+        run: |
+          set -euo pipefail
+
+          cd "${{ steps.proj.outputs.workdir }}"
+          rm -rf "$GITHUB_WORKSPACE/build"
+          mkdir -p "$GITHUB_WORKSPACE/build"
+
           xcodebuild archive \
-            -project ios_project.xcodeproj \
-            -scheme "$SCHEME" \
-            -archivePath ios_project.xcarchive \
+            -project "${{ steps.proj.outputs.projname }}" \
+            -scheme "${{ steps.scheme.outputs.scheme }}" \
             -configuration Release \
             -destination 'generic/platform=iOS' \
+            -archivePath "$GITHUB_WORKSPACE/build/app.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO
+            2>&1 | tee "$GITHUB_WORKSPACE/xcodebuild.log"
 
-          mkdir -p Payload
-          find ios_project.xcarchive/Products -name "*.app" -exec cp -r {} Payload/ \;
-          zip -qr chain_unsigned.ipa Payload
-          rm -rf ios_project.xcarchive
-
-      - name: Upload IPA to Release
+      - name: Package unsigned IPA
+        id: pack
         run: |
-          gh release upload ${{ env.LATEST_TAG }} ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa --clobber
+          set -euo pipefail
+
+          APP=$(find "$GITHUB_WORKSPACE/build/app.xcarchive/Products/Applications" \
+                -maxdepth 1 -name "*.app" -type d | head -n 1)
+          if [ -z "$APP" ]; then
+            echo "::error::archive 产物里没有 .app，检查 xcodebuild.log"
+            ls -R "$GITHUB_WORKSPACE/build" | head -40
+            exit 1
+          fi
+          echo "APP: $APP"
+
+          rm -rf "$GITHUB_WORKSPACE/pkg"
+          mkdir -p "$GITHUB_WORKSPACE/pkg/Payload"
+          cp -R "$APP" "$GITHUB_WORKSPACE/pkg/Payload/"
+
+          # -y 保留符号链接，Godot 的 framework 里有 symlink，丢了会签名/运行失败
+          cd "$GITHUB_WORKSPACE/pkg"
+          zip -qry "$GITHUB_WORKSPACE/${IPA_NAME}" Payload
+
+          ls -lh "$GITHUB_WORKSPACE/${IPA_NAME}"
+          echo "app=$APP" >> "$GITHUB_OUTPUT"
+
+      - name: Verify IPA contents
+        run: |
+          set -euo pipefail
+
+          IPA="$GITHUB_WORKSPACE/${IPA_NAME}"
+          echo "=== IPA 结构 ==="
+          unzip -l "$IPA" | head -15
+
+          APPDIR=$(find "$GITHUB_WORKSPACE/pkg/Payload" -maxdepth 1 -name "*.app" -type d | head -n 1)
+          PLIST="$APPDIR/Info.plist"
+
+          echo "=== Info.plist 关键字段 ==="
+          /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Print :MinimumOSVersion" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" "$PLIST" || true
+
+          echo "=== 可执行文件与 framework ==="
+          ls -lh "$APPDIR" | head -20
+          ls "$APPDIR/Frameworks" 2>/dev/null || echo "(无 Frameworks 目录)"
+
+      - name: Upload IPA to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ steps.rel.outputs.tag }}" \
+            "$GITHUB_WORKSPACE/${IPA_NAME}" --clobber
+          echo "已上传到 ${{ steps.rel.outputs.tag }}"
 
-      - name: Upload as Actions Artifact (Backup)
+      - name: Upload as Actions artifact (backup)
         uses: actions/upload-artifact@v4
         with:
           name: chain-unsigned-ipa
-          path: ${{ env.PROJECT_DIR }}/build/chain_unsigned.ipa
+          path: ${{ env.IPA_NAME }}
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: xcodebuild.log
+          if-no-files-found: ignore
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### iOS 构建结果"
+            echo ""
+            echo "- 发行版: \`${{ steps.rel.outputs.tag }}\`"
+            echo "- 来源包: \`${{ steps.rel.outputs.asset }}\`"
+            echo "- Scheme: \`${{ steps.scheme.outputs.scheme }}\`"
+            if [ -f "${IPA_NAME}" ]; then
+              echo "- IPA: \`${IPA_NAME}\` ($(du -h "${IPA_NAME}" | cut -f1))"
+              echo "- 签名: 未签名（真机安装需重签）"
+            else
+              echo "- IPA: 未生成"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
